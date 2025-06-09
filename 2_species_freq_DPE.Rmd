@@ -1,0 +1,527 @@
+---
+title: "Species Frequency & Detection Probability Estimates"
+author: "Matthew Morgan"
+date: "2024-10-16"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+This code prepares data for further analysis and merges the master bird DB 
+with transect visibility and bird details (including mass, trophic niche and 
+trophic position). VIF is tested with LM to test for collinearity. Multiple 
+models are compared with various combinations and interactions of covariates. 
+Code is setup to adjust master db with detection functions.  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages}
+library(Distance)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(car)
+library(readr)
+```
+
+```{r set directory}
+setwd("C:/Users/721049/OneDrive - hull.ac.uk/Bird_DA_GitHub")
+getwd()
+```
+
+```{r import data}
+bird <- read_csv("Master_DB_Birds.csv", 
+                show_col_types = FALSE)
+sum(bird$count) # 14708
+
+detect <- read_csv("detectability_category.csv", 
+                 show_col_types = FALSE)
+
+species_size <- read_csv("tran.birdlist.alldetails.csv")
+```
+## Composition of bird speicies
+
+```{r bird encounter frequency}
+# Summarise data by species, calculate total count, add frequency, and percentage column
+bird_summary <- bird %>%
+  group_by(species) %>%                                   
+  summarise(
+    total_count = sum(count),                            
+    frequency_detected = n()                              
+  ) %>%
+  mutate(percentage = (total_count / sum(total_count)) * 100) 
+
+#
+print(bird_summary)
+write_csv(bird_summary, "bird_count_freq.csv")
+```
+
+Calculate bird data Yes and No Freq with %
+```{r bird encounter with and without water}
+# Summarise data by species, calculate total count, include water presence details, add frequency, and percentage column
+bird_summary <- bird %>%
+  group_by(species) %>%
+  summarise(
+    total_count = sum(count),                               
+    water_present_yes = sum(water == "Yes", na.rm = TRUE),  
+    water_present_no = sum(water == "No", na.rm = TRUE),    
+    frequency_detected = n()                               
+  ) %>%
+  mutate(
+    percentage = (total_count / sum(total_count)) * 100,          
+    water_yes_percentage = (water_present_yes / frequency_detected) * 100,  
+    water_no_percentage = (water_present_no / frequency_detected) * 100     
+  )
+
+# 
+print(bird_summary)
+
+# save
+write_csv(bird_summary, "bird_count_freq_water_presence.csv")
+
+
+```
+
+```{r bird count summary}
+# Summarise data by species
+bird_count <- bird %>%
+  group_by(species) %>%
+  summarise(
+    total_count = sum(count),                               
+    water_present_yes = sum(count[water == "Yes"], na.rm = TRUE), 
+    water_present_no = sum(count[water == "No"], na.rm = TRUE)    
+  )
+
+# 
+print(bird_count)
+sum(bird_count$total_count)
+# 
+write_csv(bird_count, "bird_count_water_presence.csv")
+```
+
+## Detection probability estimates
+
+```{r merge data}
+# Merging bird and detect based on the "transect and transect_section
+merged_data <- merge(bird, detect, by = c("transect", "transect_section"))
+colnames(merged_data)[23] <- "Region.Label"
+
+#
+head(merged_data)
+unique(merged_data$species) # 79
+sum(merged_data$count) # 14708
+```
+
+```{r correct names}
+colnames(merged_data)[colnames(merged_data) == "species"] <- "common_name"
+
+merged_data <- merge(merged_data, species_size, by = c("common_name"))
+
+# View the merged data
+head(merged_data)
+ unique(merged_data$common_name) # 79
+ sum(merged_data$count) # 14708
+```
+
+Filter birds from bands 3-4 they have unbounded distances which makes it impossible
+to use for detectability estimates. Mid-point distances added (0-25 =12.5, 25-100 = 62.5)
+```{r filter to distance bands 1 and 2}
+filtered_data <- merged_data[merged_data$distance_code %in% c(1, 2), ]
+
+# Create a numeric 'distance' column based on the 'distance_code' (mid-point)
+filtered_data$Distance <- ifelse(filtered_data$distance_code == 1, 12.5, 62.5)
+
+# Rename the "observer" column to avoid conflict
+# colnames(filtered_data)[colnames(filtered_data) == "observer"] <- "observer_name"
+
+# Check if the column was renamed successfully
+head(filtered_data)
+```
+
+```{r check data availability for modelling}
+table(filtered_data$Region.Label)
+
+# Summarise counts by species, distance, and habitat
+species_distance_summary <- filtered_data %>%
+  group_by(size_class, Distance, Region.Label) %>%
+  summarise(count = n(), .groups = 'drop')
+
+#
+sum(species_distance_summary$count)
+```
+
+Plot species detection declines
+```{r species detection declines}
+# Create column to represent distance with values 1 and 2
+species_distance_summary$Distance.Bands <- ifelse(species_distance_summary$Distance == 12.5, 1, 2)
+
+# Set the order of Region.Label to be 'open', 'semi', 'closed'
+species_distance_summary$Region.Label <- factor(species_distance_summary$Region.Label, levels = c("open", "semi", "closed"))
+
+# Colours for each size class
+manual_colors <- c("large" = "#1f77b4", "medium" = "#ff7f0e", "small" = "#2ca02c")  
+
+#
+ggplot(species_distance_summary, aes(x = Distance.Bands, y = count, color = size_class, group = size_class)) +
+  geom_point(size = 4) +         
+  geom_line(size = 1) +          
+  labs(
+    title = "Count vs Distance Across Habitats",
+    x = "Distance Bands",        
+    y = "Count",
+    color = "Size Class"
+  ) +
+  scale_x_continuous(breaks = c(1, 2), labels = c("1", "2")) +  # Change x-axis to 1 and 2
+  scale_color_manual(values = manual_colors) +   
+  facet_wrap(~ Region.Label) +                   
+  theme_minimal() +                              
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14), 
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 13)
+  )
+
+```
+
+Create summary table to look at the amount of data available for modelling
+```{r data available for modelling}
+# Summary table
+summary_table <- species_distance_summary %>%
+  group_by(size_class, Region.Label) %>%
+  summarise(
+    Count_Band_1 = sum(count[Distance.Bands == 1]),   
+    Count_Band_2 = sum(count[Distance.Bands == 2]),   
+    Total_Count = sum(count)                         
+  ) %>%
+  ungroup()
+
+# View the summary
+summary_table
+sum(summary_table$Total_Count) #4065
+```
+
+```{r histograms of birds sizes and habitats divided by water/no water}
+str(species_distance_summary)
+# Group data by transect and transect section
+summary_1 <- filtered_data %>%
+  group_by(transect, transect_section, size_class, water, Region.Label) %>%
+  summarize(count = n())
+
+# Print the summarized data
+print(summary_1)
+
+#
+ggplot(summary_1, aes(x = Region.Label, fill = water)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Habitat Distribution across transects",
+       x = "Size Class",
+       y = "Count") +
+  theme_minimal()
+
+```
+
+Running all models with all covariates to check for collinearity. 
+
+```{r VIF check for collinearity}
+table(filtered_data$size_class, filtered_data$Region.Label)
+
+# Fit linear models to assess VIF with the added 'water' variable
+model1 <- lm(Distance ~ size_class + Region.Label + observer + water, data = filtered_data)
+model2 <- lm(Distance ~ size_class * Region.Label + observer + water, data = filtered_data)
+model3 <- lm(Distance ~ size_class * Region.Label * observer + water, data = filtered_data)
+
+# Calculate VIF for all predictors and interactions in the model
+vif(model1, type = "predictor")
+vif(model2, type = "predictor")
+vif(model3, type = "predictor")
+
+```
+
+```{r data preparation}
+str(filtered_data)
+summary(filtered_data)
+
+# correct df
+convunit <- convert_units("meter", "kilometer", "hectare")
+names(filtered_data)[names(filtered_data) == "Distance"] <- "distance"
+filtered_data$distbegin <- ifelse(filtered_data$distance == 12.5, 0, 25)
+filtered_data$distend <- ifelse(filtered_data$distance == 12.5, 25, 100)
+
+# Remove the distance column from the data
+filtered_data$distance <- NULL
+filtered_data$distance_code <- NULL
+names(filtered_data)[names(filtered_data) == "observer"] <- "OBs"
+filtered_data
+sum(filtered_data$count)
+```
+## Individual models
+
+```{r Filtered no covariates}
+ahn.0 <- ds(filtered_data, transect="line", key="hn",
+truncation=100, convert_units = conv)
+print(ahn.0$ddf$criterion)
+print(ahn.0$ddf$meta.data$breaks)
+```
+
+```{r Filtered + Water}
+ahn.w <- ds(filtered_data, transect="line", key="hn", formula=~water,
+truncation=100, convert_units = conv)
+print(ahn.w$ddf$criterion)
+print(ahn.w$ddf$meta.data$breaks)
+```
+
+```{r Filtered + Size}
+ahn.size <- ds(filtered_data, transect="line", key="hn", formula=~size_class,
+truncation=100, convert_units = conv)
+print(ahn.size$ddf$criterion)
+print(ahn.size$ddf$meta.data$breaks)
+summary(ahn.size)
+```
+
+```{r Filtered + habitat} 
+ahn.hab <- ds(filtered_data, transect="line", key="hn", formula=~Region.Label,
+truncation=100, convert_units = conv)
+print(ahn.hab$ddf$criterion)
+print(ahn.hab$ddf$meta.data$breaks)
+```
+
+```{r Filtered + Observer}
+# Fit the first model (half-normal)
+ahn.obs <- ds(filtered_data, transect="line", key="hn", formula=~OBs, truncation=100, convert_units = conv)
+print(ahn.obs$ddf$criterion) 
+print(ahn.obs$ddf$meta.data$breaks)
+```
+
+```{r Filtered + Size + Habitat}
+ahn.size.hab <- ds(filtered_data, transect="line", key="hn", formula=~size_class+Region.Label,
+truncation=100, convert_units = conv)
+print(ahn.size.hab$ddf$criterion)
+print(ahn.size.hab$ddf$meta.data$breaks)
+```
+
+```{r Filtered + Size + Habitat + Water}
+ahn.size.hab.w <- ds(filtered_data, transect="line", key="hn", formula=~size_class+Region.Label+water,
+truncation=100, convert_units = conv)
+print(ahn.size.hab.w$ddf$criterion)
+print(ahn.size.hab.w$ddf$meta.data$breaks)
+```
+
+```{r Filtered + Size + Observer}
+ahn.size.obs <- ds(filtered_data, transect="line", key="hn", formula=~size_class+OBs,
+truncation=100, convert_units = conv)
+print(ahn.size.obs$ddf$criterion)
+print(ahn.size.obs$ddf$meta.data$breaks)
+```
+
+```{r Filtered + Size + Observer + Water}
+ahn.size.obs.w <- ds(filtered_data, transect="line", key="hn", formula=~size_class+OBs+water,
+truncation=100, convert_units = conv)
+print(ahn.size.obs.w$ddf$criterion)
+print(ahn.size.obs.w$ddf$meta.data$breaks)
+```
+
+
+```{r Filtered + Habitat + Observer}
+ahn.hab.obs <- ds(filtered_data, transect="line", key="hn", formula=~Region.Label+OBs,
+truncation=100, convert_units = conv)
+print(ahn.hab.obs$ddf$criterion)
+print(ahn.hab.obs$ddf$meta.data$breaks)
+```
+
+```{r Filtered + Habitat + Observer + Water}
+ahn.hab.obs.w <- ds(filtered_data, transect="line", key="hn", formula=~Region.Label+OBs+water,
+truncation=100, convert_units = conv)
+print(ahn.hab.obs$ddf$criterion)
+print(ahn.hab.obs$ddf$meta.data$breaks)
+```
+
+
+```{r Filtered + Habitat + Observer + Size}
+ahn.hab.obs.size <- ds(filtered_data, transect="line", key="hn", formula=~Region.Label+OBs+size_class,
+truncation=100, convert_units = conv)
+print(ahn.hab.obs.size$ddf$criterion)
+print(ahn.hab.obs.size$ddf$meta.data$breaks)
+```
+
+```{r Filtered + Habitat + Observer + Size + Water}
+ahn.hab.obs.size.w <- ds(filtered_data, transect="line", key="hn", formula=~Region.Label+OBs+size_class+water,
+truncation=100, convert_units = conv)
+print(ahn.hab.obs.size.w$ddf$criterion)
+print(ahn.hab.obs.size.w$ddf$meta.data$breaks)
+```
+
+
+```{r Filtered + Size * Habitat}
+ahn.size.xhab <- ds(filtered_data, transect="line", key="hn", formula=~size_class*Region.Label,
+truncation=100, convert_units = conv)
+print(ahn.size.xhab$ddf$criterion)
+print(ahn.size.xhab$ddf$meta.data$breaks)
+```
+
+```{r Filtered + Size * Habitat * Water}
+ahn.size.xhab.w <- ds(filtered_data, transect="line", key="hn", formula=~size_class*Region.Label*water,
+truncation=100, convert_units = conv)
+print(ahn.size.xhab.w$ddf$criterion)
+print(ahn.size.xhab.w$ddf$meta.data$breaks)
+```
+
+```{r Summaries of Water Transect Models}
+model_summary <- summarize_ds_models(ahn.0, ahn.w, ahn.size, ahn.hab, ahn.obs, ahn.size.hab, ahn.size.hab.w, ahn.size.obs, ahn.size.obs.w, ahn.hab.obs, ahn.hab.obs.w, ahn.hab.obs.size, ahn.hab.obs.size.w, ahn.size.xhab, ahn.size.xhab.w)
+
+summary(ahn.size.xhab)
+
+gof_ds(ahn.size.xhab)
+
+# write to CSV in your working directory
+write.csv(model_summary, "model_summary.csv", row.names = FALSE)
+
+```
+
+```{r Plots of best water models}
+plot(ahn.size.xhab, nc=20, main="Size * Habitat", pch=20, pdf=TRUE)
+plot(ahn.size.hab)
+```
+
+```{r best water model}
+# Fit best model
+ahn.best <- ds(filtered_data, transect="line", key="hn", formula=~size_class*Region.Label,
+truncation=100, convert_units = conv)
+
+# Plot model with OBS and MAS
+plot(ahn.best, nc=10, main="Model with Size and Habitat Interaction",
+pch=".", pdf=TRUE)
+#
+gof_result <- gof_ds(ahn.best)
+# Print the results
+print(gof_result)
+
+```
+
+Extracting detection probabilites by distances from best model. Note that the 
+detection probability has been averaged and therefore values at 12.5 are the 
+same as 62.5.
+```{r extract probability estimates for habitat}
+# Create a data frame for each combination of size_class, Region.Label, and distance
+new_data <- expand.grid(
+  size_class = c("small", "medium", "large"),
+  Region.Label = c("closed", "semi", "open"),
+  distance = c(12.5, 62.5)  # Midpoints of your distance bands
+)
+
+# Generate predictions using the model
+predicted_probs <- predict(ahn.size.xhab, newdata = new_data)
+
+# Extract the first value from list and convert to numeric values
+predicted_probs <- sapply(predicted_probs, function(x) if (is.list(x)) x[[1]] else x)
+
+# Add the predictions to new_data for easy reference
+new_data$Detection_Probability <- predicted_probs
+
+# Print the prediction results
+print(new_data)
+
+# Optional: Plot detection probabilities by size class and Region.Label
+p <- ggplot(new_data, aes(x = distance, y = Detection_Probability, color = size_class)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ Region.Label) +
+  labs(title = "Detection Probability by Size Class and Transect Visibility",
+       x = "Distance (m)", y = "Detection Probability") +
+  theme_classic()
+
+p
+
+ggsave("detection_probability_plot.png", plot = p, width = 11.7, height = 8.3, units = "in", dpi = 300)
+```
+Extracting detection probabilities for small, medium, large birds across 
+different habitats
+```{r extract probability estimates for habitat and size}
+# Define a function to create detection function plots for each region
+plot_detection_function <- function(region_label, main_title, show_legend = TRUE, show_xlab = TRUE, show_ylab = TRUE, main_text_size = 1.5, axis_text_size = 1.2, legend_text_size = 1.2) {
+  # Plot 
+  plot(
+    0, 0, type = "n",              # Create an empty plot
+    xlim = c(0, 100),              # Distance range
+    ylim = c(0, 1),                # Detection probability range up to 1
+    main = main_title,             # Main title
+    xlab = if (show_xlab) "Distance" else "",  # Conditional x-axis label
+    ylab = if (show_ylab) "Detection Probability" else "",  # Conditional y-axis label
+    cex.main = main_text_size,     # Main title size
+    cex.axis = axis_text_size,     # Axis text size
+    cex.lab = axis_text_size       # Axis label size
+  )
+  
+  # Add detection probability curves for each size class
+  add.df.covar.line(ahn.size.xhab, data = data.frame(size_class = "small", Region.Label = region_label), 
+                    lwd = 3, col = "blue")
+  add.df.covar.line(ahn.size.xhab, data = data.frame(size_class = "medium", Region.Label = region_label), 
+                    lwd = 3, col = "green")
+  add.df.covar.line(ahn.size.xhab, data = data.frame(size_class = "large", Region.Label = region_label), 
+                    lwd = 3, col = "red")
+  
+  # Add legend only if show_legend is TRUE
+  if (show_legend) {
+    legend("topright", legend = c("Small", "Medium", "Large"),
+           col = c("blue", "green", "red"), lwd = 3, cex = legend_text_size)
+  }
+}
+
+# Open a PNG device to save the multi-plot layout
+png("Filtered_Detection_Function_Comparison_simple.png", width = 3508, height = 1300, res = 300)
+
+# Set up 1-row 3-column layout for the plots
+par(mfrow = c(1, 3))
+
+# Create the detection function plots for each region
+plot_detection_function("closed", "Closed Transect", show_legend = FALSE, show_xlab = FALSE, show_ylab = TRUE)
+plot_detection_function("semi", "Semi-closed Transect", show_legend = FALSE, show_xlab = TRUE, show_ylab = FALSE)
+plot_detection_function("open", "Open Transect", show_legend = TRUE, show_xlab = FALSE, show_ylab = FALSE)
+
+# Reset layout after plotting
+par(mfrow = c(1, 1))
+
+# Close the PNG device to save the file
+dev.off()
+
+
+```
+
+
+```{r}
+knitr::kable(summarize_ds_models(ahn.0, ahn.w, ahn.size, ahn.hab, ahn.obs, ahn.size.hab, ahn.size.hab.w, ahn.size.obs, ahn.size.obs.w, ahn.hab.obs, ahn.hab.obs.w, ahn.hab.obs.size, ahn.hab.obs.size.w, ahn.size.xhab, ahn.size.xhab.w), 
+             caption="Candidate model set for covariate analysis.",
+             row.names = FALSE, digits=5)
+```
+
+
+adjusting the bird data base
+```{r}
+adjusted <- filtered_data
+
+# Define correction factors
+correction_factors <- data.frame(
+  Region = c("closed", "closed", "closed", "semi", "semi", "semi", "open", "open", "open"),
+  Size = c("small", "medium", "large", "small", "medium", "large", "small", "medium", "large"),
+  Factor = c(0.163, 0.258, 0.289, 0.179, 0.238, 0.295, 0.225, 0.269, 0.297)
+)
+
+# use correction factors
+adjusted <- adjusted %>%
+  left_join(correction_factors, by = c("Region.Label" = "Region", "size_class" = "Size")) %>%
+  mutate(
+    true_counts = count / Factor
+  )
+
+print(adjusted)
+
+#
+
+write_csv(adjusted, "corrected_density.csv")
+
+
+```
+
+
