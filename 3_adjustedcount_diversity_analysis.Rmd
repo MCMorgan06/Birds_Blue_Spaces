@@ -1,0 +1,416 @@
+---
+title: "Bird_data_2024"
+author: "Matthew Morgan"
+date: "2024-10-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r laod packages}
+library(vegan)
+library(tidyverse)
+library(readr)
+```
+
+```{r import data from directory }
+bird <- read_csv("corrected_density.csv", 
+                 show_col_types = FALSE)
+species <- unique(bird$species)
+```
+
+```{r pool periods}
+bird <- bird %>%
+  mutate(period = case_when(
+    period %in% c(1, 3, 4) ~ 1,
+    TRUE ~ period  # Keeps other values unchanged
+  ))
+```
+
+
+```{r group and sum}
+bird_data_grouped <- bird %>%
+  group_by(transect, period, water, species) %>%
+  summarise(count = sum(true_counts, na.rm = TRUE), .groups = 'drop')
+
+# Adjust counts for period == 1
+bird_data_grouped <- bird_data_grouped %>%
+  mutate(count = ifelse(period == 1, count / 3, count))
+
+# Reshape to wide format
+diversity_data <- bird_data_grouped %>%
+  pivot_wider(names_from = species, values_from = count, values_fill = 0)
+
+#
+head(diversity_data)
+```
+
+```{r wide format for manipulation}
+diversity_data <- bird_data_grouped %>%
+  pivot_wider(names_from = species, values_from = count, values_fill = 0)
+
+#
+head(diversity_data)
+```
+
+```{r diversity indicies}
+#
+str(diversity_data)
+
+# Species start at column 4 and end at column 83 (adjust this range if needed)
+species_columns <- 4:77
+
+# Calculate the Shannon, Simpson, Pielou's Evenness, Species Richness, Mean Species, and Total Species Richness
+diversity_data <- diversity_data %>%
+  mutate(
+    # Shannon Index
+    shannon_index = diversity(diversity_data[, species_columns], index = "shannon"),
+    
+    # Simpson Index
+    simpson_index = diversity(diversity_data[, species_columns], index = "simpson"),
+    
+    # Species Richness (total number of species observed, i.e., count of non-zero species in each transect)
+    species_richness = apply(diversity_data[, species_columns], 1, function(x) sum(x > 0)),
+    
+    # Pielou's Evenness: H' / log(S), where S is species richness
+    pielou_evenness = shannon_index / log(species_richness),
+
+    # Total Species Richness: another biodiversity metric counting the total number of unique species across all transects
+    species_richness = apply(diversity_data[, species_columns], 1, function(x) sum(x > 0))
+    
+    )
+#
+print(head(diversity_data))
+```
+
+```{r specify transect pairings}
+# Manually create the exact pairing for each transect
+diversity_data <- diversity_data %>%
+  arrange(transect) %>%
+  mutate(pairing = case_when(
+    transect == 1  ~ 1,
+    transect == 2  ~ 1,
+    transect == 3  ~ 2,
+    transect == 4  ~ 2,
+    transect == 5  ~ 3,
+    transect == 6  ~ 3,
+    transect == 7  ~ 4,
+    transect == 8  ~ 4,
+    transect == 9  ~ 5,
+    transect == 10 ~ 5,
+    transect == 11 ~ 6,
+    transect == 12 ~ 6,
+    transect == 13 ~ 7,
+    transect == 14 ~ 7,
+    transect == 15 ~ 8,
+    transect == 16 ~ 8,
+    transect == 17 ~ 9,
+    transect == 18 ~ 9,
+    transect == 19 ~ 10,
+    transect == 20 ~ 10,
+    transect == 21 ~ 11,
+    transect == 22 ~ 11
+  ))
+```
+
+```{r reshape the data}
+paired_data <- diversity_data %>%
+  group_by(pairing, period) %>%
+  summarise(
+    # Shannon Index
+    with_water_shannon = first(shannon_index[water == "Yes"], default = NA),
+    without_water_shannon = first(shannon_index[water == "No"], default = NA),
+    
+    # Simpson Index
+    with_water_simpson = first(simpson_index[water == "Yes"], default = NA),
+    without_water_simpson = first(simpson_index[water == "No"], default = NA),
+    
+    # Pielou's Evenness
+    with_water_evenness = first(pielou_evenness[water == "Yes"], default = NA),
+    without_water_evenness = first(pielou_evenness[water == "No"], default = NA),
+    
+    # Total Species Richness (count of unique species for each condition)
+    with_water_total_richness = first(species_richness[water == "Yes"], default = NA),
+    without_water_total_richness = first(species_richness[water == "No"], default = NA)
+  ) %>%
+  drop_na()  # Remove rows where either with_water or without_water is NA
+```
+
+```{r check species lists and ensure calcualtions are correct}
+# Identify unique species for 'with water' transects
+species_with_water <- colnames(diversity_data[, species_columns])[colSums(diversity_data[diversity_data$water == "Yes", species_columns]) > 0]
+
+# Identify unique species for 'without water' transects
+species_without_water <- colnames(diversity_data[, species_columns])[colSums(diversity_data[diversity_data$water == "No", species_columns]) > 0]
+
+# Identify the total number of unique species across all transects
+total_unique_species <- unique(c(species_with_water, species_without_water))
+
+# Results for total species richness
+print(paste("Total unique species across all transects:", length(total_unique_species)))
+print(paste("Total species richness in transects with water:", length(species_with_water)))
+print(paste("Total species richness in transects without water:", length(species_without_water)))
+```
+
+```{r check no species are missing from original list}
+# Extract unique species from the 'birds' dataframe (long format)
+species_birds <- unique(bird$species)  # Assuming the species column is called 'species'
+
+# Extract the species columns from 'diversity_data' and get unique species
+species_diversity_data <- colnames(diversity_data[, species_columns])
+
+# Species in 'birds' but not in 'diversity_data'
+species_in_birds_not_in_diversity <- setdiff(species_birds, species_diversity_data)
+print("Species in 'birds' but not in 'diversity_data':")
+print(species_in_birds_not_in_diversity)
+
+# Species in 'diversity_data' but not in 'birds'
+species_in_diversity_not_in_birds <- setdiff(species_diversity_data, species_birds)
+print("Species in 'diversity_data' but not in 'birds':")
+print(species_in_diversity_not_in_birds)
+
+# Check for species that are common in both lists
+common_species <- intersect(species_birds, species_diversity_data)
+print(paste("Number of common species:", length(common_species)))
+
+# Identify species unique to 'with water' transects
+
+# Extract species found in 'with water' transects
+species_with_water <- colnames(diversity_data[, species_columns])[colSums(diversity_data[diversity_data$water == "Yes", species_columns]) > 0]
+
+# Extract species found in 'without water' transects
+species_without_water <- colnames(diversity_data[, species_columns])[colSums(diversity_data[diversity_data$water == "No", species_columns]) > 0]
+
+# Species unique to 'with water' transects (i.e., those not found in 'without water' transects)
+species_unique_to_water <- setdiff(species_with_water, species_without_water)
+print("Species unique to 'with water' transects:")
+print(species_unique_to_water)
+
+species_unique_to_without_water <- setdiff(species_without_water, species_with_water)
+print(species_unique_to_without_water)
+```
+
+```{r diagnostic plots}
+# Shannon Index Histograms
+hist(diversity_data$shannon_index[diversity_data$water == "Yes"], 
+     main = "Histogram of Shannon Index (With Water)", 
+     xlab = "Shannon Index", 
+     col = "lightblue", 
+     breaks = 10)
+
+hist(diversity_data$shannon_index[diversity_data$water == "No"], 
+     main = "Histogram of Shannon Index (Without Water)", 
+     xlab = "Shannon Index", 
+     col = "lightgreen", 
+     breaks = 10)
+
+# Shannon Index Q-Q Plots
+qqnorm(diversity_data$shannon_index[diversity_data$water == "Yes"], main = "Q-Q Plot (With Water - Shannon Index)")
+qqline(diversity_data$shannon_index[diversity_data$water == "Yes"])
+
+qqnorm(diversity_data$shannon_index[diversity_data$water == "No"], main = "Q-Q Plot (Without Water - Shannon Index)")
+qqline(diversity_data$shannon_index[diversity_data$water == "No"])
+
+# Simpson Index Histograms
+hist(diversity_data$simpson_index[diversity_data$water == "Yes"], 
+     main = "Histogram of Simpson Index (With Water)", 
+     xlab = "Simpson Index", 
+     col = "lightblue", 
+     breaks = 10)
+
+hist(diversity_data$simpson_index[diversity_data$water == "No"], 
+     main = "Histogram of Simpson Index (Without Water)", 
+     xlab = "Simpson Index", 
+     col = "lightgreen", 
+     breaks = 10)
+
+# Simpson Index Q-Q Plots
+qqnorm(diversity_data$simpson_index[diversity_data$water == "Yes"], main = "Q-Q Plot (With Water - Simpson Index)")
+qqline(diversity_data$simpson_index[diversity_data$water == "Yes"])
+
+qqnorm(diversity_data$simpson_index[diversity_data$water == "No"], main = "Q-Q Plot (Without Water - Simpson Index)")
+qqline(diversity_data$simpson_index[diversity_data$water == "No"])
+
+# Pielou's Evenness Histograms
+hist(diversity_data$pielou_evenness[diversity_data$water == "Yes"], 
+     main = "Histogram of Pielou's Evenness (With Water)", 
+     xlab = "Pielou's Evenness", 
+     col = "lightblue", 
+     breaks = 10)
+
+hist(diversity_data$pielou_evenness[diversity_data$water == "No"], 
+     main = "Histogram of Pielou's Evenness (Without Water)", 
+     xlab = "Pielou's Evenness", 
+     col = "lightgreen", 
+     breaks = 10)
+
+# Pielou's Evenness Q-Q Plots
+qqnorm(diversity_data$pielou_evenness[diversity_data$water == "Yes"], main = "Q-Q Plot (With Water - Pielou's Evenness)")
+qqline(diversity_data$pielou_evenness[diversity_data$water == "Yes"])
+
+qqnorm(diversity_data$pielou_evenness[diversity_data$water == "No"], main = "Q-Q Plot (Without Water - Pielou's Evenness)")
+qqline(diversity_data$pielou_evenness[diversity_data$water == "No"])
+
+
+# Total Species Richness Histograms
+hist(diversity_data$species_richness[diversity_data$water == "Yes"], 
+     main = "Histogram of Total Species Richness (With Water)", 
+     xlab = "Total Species Richness", 
+     col = "lightblue", 
+     breaks = 10)
+
+hist(diversity_data$species_richness[diversity_data$water == "No"], 
+     main = "Histogram of Total Species Richness (Without Water)", 
+     xlab = "Total Species Richness", 
+     col = "lightgreen", 
+     breaks = 10)
+
+# Total Species Richness Q-Q Plots
+qqnorm(diversity_data$species_richness[diversity_data$water == "Yes"], main = "Q-Q Plot (With Water - Total Species Richness)")
+qqline(diversity_data$species_richness[diversity_data$water == "Yes"])
+
+qqnorm(diversity_data$species_richness[diversity_data$water == "No"], main = "Q-Q Plot (Without Water - Total Species Richness)")
+qqline(diversity_data$species_richness[diversity_data$water == "No"])
+```
+
+```{r stat tests}
+# Wilcoxon Signed-Rank Test for Shannon Index
+shannon_wilcox_test_result <- wilcox.test(paired_data$with_water_shannon, paired_data$without_water_shannon, paired = TRUE)
+print("Shannon Index Wilcoxon Test:")
+print(shannon_wilcox_test_result)
+
+# Wilcoxon Signed-Rank Test for Simpson Index
+simpson_wilcox_test_result <- wilcox.test(paired_data$with_water_simpson, paired_data$without_water_simpson, paired = TRUE)
+print("Simpson Index Wilcoxon Test:")
+print(simpson_wilcox_test_result)
+
+# Wilcoxon Signed-Rank Test for Pielou's Evenness
+evenness_wilcox_test_result <- wilcox.test(paired_data$with_water_evenness, paired_data$without_water_evenness, paired = TRUE)
+print("Pielou's Evenness Wilcoxon Test:")
+print(evenness_wilcox_test_result)
+
+# Wilcoxon Signed-Rank Test for Total Species Richness
+total_species_richness_wilcox_test_result <- wilcox.test(paired_data$with_water_total_richness, paired_data$without_water_total_richness, paired = TRUE)
+print("Total Species Richness Wilcoxon Test:")
+print(total_species_richness_wilcox_test_result)
+
+# Tidy Results
+tidy_results <- data.frame(
+  Metric = c("Shannon Index", "Simpson Index", "Pielou's Evenness", "Total Species Richness"),
+  Statistic = c(
+    shannon_wilcox_test_result$statistic,
+    simpson_wilcox_test_result$statistic,
+    evenness_wilcox_test_result$statistic,
+    total_species_richness_wilcox_test_result$statistic
+  ),
+  P_Value = c(
+    shannon_wilcox_test_result$p.value,
+    simpson_wilcox_test_result$p.value,
+    evenness_wilcox_test_result$p.value,
+    total_species_richness_wilcox_test_result$p.value
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Display the tidy results table
+print("Wilcoxon Signed-Rank Test Results (Tidy Format):")
+print(tidy_results)
+
+## Results
+# Total Species Richness	771	1.024e-05	Highly significant difference
+```
+
+
+```{r diagnostic plots divided by period}
+# Function to generate combined histograms and Q-Q plots by period and water condition
+generate_plots_by_period <- function(data, metric, metric_label) {
+  
+  # Histograms by period
+  hist_plot <- ggplot(data, aes_string(x = metric, fill = "water")) +
+    geom_histogram(color = "black", bins = 10, alpha = 0.7) +
+    labs(title = paste("Histogram of", metric_label, "by Period and Water Condition"),
+         x = metric_label, y = "Frequency") +
+    facet_wrap(~ period + water, scales = "free", ncol = 2) +
+    scale_fill_manual(values = c("lightblue", "lightgreen")) +
+    theme_minimal()
+  
+  print(hist_plot)
+  
+  # Q-Q plots by period
+  qq_plot <- ggplot(data, aes_string(sample = metric, color = "water")) +
+    stat_qq() +
+    stat_qq_line() +
+    labs(title = paste("Q-Q Plot of", metric_label, "by Period and Water Condition"),
+         x = "Theoretical Quantiles", y = "Sample Quantiles") +
+    facet_wrap(~ period + water, scales = "free", ncol = 2) +
+    scale_color_manual(values = c("lightblue", "lightgreen")) +
+    theme_minimal()
+  
+  print(qq_plot)
+}
+
+# Shannon Index
+generate_plots_by_period(diversity_data, "shannon_index", "Shannon Index")
+
+# Simpson Index
+generate_plots_by_period(diversity_data, "simpson_index", "Simpson Index")
+
+# Pielou's Evenness
+generate_plots_by_period(diversity_data, "pielou_evenness", "Pielou's Evenness")
+
+# Total Species Richness
+generate_plots_by_period(diversity_data, "species_richness", "Total Species Richness")
+
+```
+
+
+```{r stats by period}
+#
+wilcox_test_by_period <- paired_data %>%
+  group_by(period) %>%
+  summarise(
+    # Wilcoxon test for Shannon Index
+    wilcox_shannon = list(wilcox.test(with_water_shannon, without_water_shannon, paired = TRUE)),
+    
+    # Wilcoxon test for Simpson Index
+    wilcox_simpson = list(wilcox.test(with_water_simpson, without_water_simpson, paired = TRUE)),
+    
+    # Wilcoxon test for Pielou's Evenness
+    wilcox_evenness = list(wilcox.test(with_water_evenness, without_water_evenness, paired = TRUE)),
+    
+    # Wilcoxon test for Total Species Richness
+    wilcox_total_richness = list(wilcox.test(with_water_total_richness, without_water_total_richness, paired = TRUE))
+  )
+
+# tidy results
+tidy_results <- wilcox_test_by_period %>%
+  mutate(
+    # Extracting statistics and p-values for Shannon Index
+    shannon_V = sapply(wilcox_shannon, function(x) x$statistic),
+    shannon_p = sapply(wilcox_shannon, function(x) x$p.value),
+    
+    # Extracting statistics and p-values for Simpson Index
+    simpson_V = sapply(wilcox_simpson, function(x) x$statistic),
+    simpson_p = sapply(wilcox_simpson, function(x) x$p.value),
+    
+    # Extracting statistics and p-values for Pielou's Evenness
+    evenness_V = sapply(wilcox_evenness, function(x) x$statistic),
+    evenness_p = sapply(wilcox_evenness, function(x) x$p.value),
+    
+    # Extracting statistics and p-values for Total Species Richness
+    total_richness_V = sapply(wilcox_total_richness, function(x) x$statistic),
+    total_richness_p = sapply(wilcox_total_richness, function(x) x$p.value)
+  ) %>%
+  select(period, 
+         shannon_V, shannon_p, 
+         simpson_V, simpson_p, 
+         evenness_V, evenness_p, 
+         total_richness_V, total_richness_p)
+
+# Display the tidied results
+print(tidy_results)
+
+
+```
