@@ -1,0 +1,1264 @@
+---
+title: "Bird_data_2025"
+author: "Matthew Morgan"
+date: "2025-04-16"
+output: html_document
+---
+
+## Description:
+
+This code imports the master bird data and explores alpha and beta diversity,
+using observer count data (raw data). Simper analysis is then used to look at 
+the dissimilarities in abundance of species between transects. Non-aquatic 
+species highlighted with Simper are then tested with Fisher's exact tests. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# install packages
+install.packages(c(
+  "rlang",       
+  "lifecycle",   
+  "pillar",      
+  "tibble",      
+  "readr",       
+  "ggplot2",     
+  "dplyr",       
+  "tidyverse",   
+  "scales",      
+  "gridExtra",   
+  "patchwork",   
+  "vegan",       
+  "iNEXT",      
+  "car",         
+  "knitr",       
+  "kableExtra",   
+  "conflicted"
+))
+```
+
+```{r load required packages}
+library(vegan)
+library(tidyverse)
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(iNEXT)
+library(car)
+library(patchwork)
+library(scales)
+library(gridExtra)
+library(knitr)
+library(conflicted)
+```
+
+Import data from directory (check data looks correct, species = 79, count = 14708)
+```{r import data from directory}
+# setup directory if necessary
+# setwd("C:/Users/721049/OneDrive - hull.ac.uk/Bird_DA_GitHub")
+# getwd()
+
+bird <- read_csv("Master_DB_Birds.csv", 
+                 show_col_types = FALSE)
+species <- unique(bird$species)
+print(species)
+sum(bird$count)
+```
+
+```{r recording times}
+# Display all transects with details
+transect_details <- bird %>%
+  select(period, transect, start_time, end_time) %>%  
+  distinct() %>%  # Remove duplicates
+  arrange(transect, period)                           
+
+#
+print(transect_details)
+
+#
+transect_count_details <- transect_details %>%
+  group_by(transect) %>%  
+  summarise(count = n()) %>%      
+  arrange(transect)        
+
+#
+print(transect_count_details)
+```
+
+```{r recording details}
+transect_details <- transect_details %>%
+  mutate(
+    start_time = as.POSIXct(start_time, format = "%H:%M:%S"), 
+    end_time = as.POSIXct(end_time, format = "%H:%M:%S"),     
+    time = as.numeric(difftime(end_time, start_time, units = "mins")) # Calculate duration in minutes and create `time` column
+  )
+
+#
+print(transect_details)
+
+# summary statistics for the `time` column
+tran_summary <- transect_details %>%
+  summarise(
+    min_time = min(time, na.rm = TRUE),        # Minimum time
+    max_time = max(time, na.rm = TRUE),        # Maximum time
+    average_time = mean(time, na.rm = TRUE),   # Average time
+    total_time = sum(time, na.rm = TRUE)       # Total time
+  )
+
+#
+print(tran_summary)
+
+```
+
+Check that the summer periods are suitable for pooling.
+
+```{r aov species richness}
+# Calculate species richness per transect, per period, for relevant periods
+richness <- bird %>%
+  dplyr::filter(period %in% c(1, 3, 4)) %>%
+  group_by(transect, period, water) %>%
+  summarize(species_richness = n_distinct(species), .groups = "drop")
+
+# Convert period to factor
+richness$period <- as.factor(richness$period)
+
+# Repeated measures ANOVA
+aov_result <- aov(species_richness ~ period * water + Error(transect), data = richness)
+summary(aov_result)
+
+# residuals (ACCEPTABLE) 
+lm_check <- lm(species_richness ~ period * water, data = richness)
+# Q-Q plot for normality
+qqnorm(resid(lm_check))
+qqline(resid(lm_check))
+
+# Residuals vs fitted
+plot(fitted(lm_check), resid(lm_check),
+     xlab = "Fitted values", ylab = "Residuals",
+     main = "Residuals vs Fitted")
+abline(h = 0, col = "red")
+```
+
+```{r aov total abundance (summer)}
+# Calculate abundance per transect, per period
+abundance <- bird %>%
+  dplyr::filter(period %in% c(1, 3, 4)) %>%
+  group_by(transect, period, water) %>%
+  summarize(total_abundance = sum(count), .groups = "drop")
+
+# Convert period to factor
+abundance$period <- as.factor(abundance$period)
+
+# Repeated measures ANOVA
+aov_abundance <- aov(total_abundance ~ period * water + Error(transect), data = abundance)
+summary(aov_abundance)
+
+# Diagnostic checks
+lm_abund_check <- lm(total_abundance ~ period * water, data = abundance)
+
+# Q-Q plot for normality
+qqnorm(resid(lm_abund_check))
+qqline(resid(lm_abund_check))
+
+# Residuals vs Fitted
+plot(fitted(lm_abund_check), resid(lm_abund_check),
+     xlab = "Fitted values", ylab = "Residuals",
+     main = "Residuals vs Fitted")
+abline(h = 0, col = "red")
+
+```
+We pooled summer survey data after confirming that species richness and 
+abundance did not vary significantly across survey periods, as indicated by 
+aov.
+
+```{r pool periods (creating winter and summer)}
+bird <- bird %>%
+mutate(period = case_when(
+ period %in% c(1, 3, 4) ~ 1,
+ TRUE ~ period
+  ))
+```
+
+```{r group and average summer data}
+# Group bird data, sum the counts but then divide by 3 for summer periods
+bird_data_grouped <- bird %>%
+  group_by(transect, period, water, species) %>%
+  summarise(total_count = sum(count, na.rm = TRUE), .groups = 'drop')
+
+head(bird_data_grouped)
+sum(bird_data_grouped$count)
+
+# divide period 1 by 3 (three replicated carried out over the summer months)
+
+# Logic to modify counts for Period 1 only
+bird_data_grouped <- bird_data_grouped %>%
+  mutate(count = if_else(period == 1, total_count / 3, total_count))
+head(bird_data_grouped)
+```
+
+```{r remove total count column}
+bird_data_grouped <- bird %>%
+  group_by(transect, period, water, species) %>%
+  summarise(total_count = sum(count, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(count = total_count / 3) %>%
+  select(-total_count) 
+```
+
+```{r quality control data check using barn swallow}
+# Filter the dataset for Barn Swallows in Period 1 and Transect 1
+barn_swallow_data <- bird %>%
+  dplyr::filter(species == "Barn Swallow", period == 1, transect == 1) # 10/3 = 3.33 (matches bird_data_grouped)
+print(barn_swallow_data) # sum = 10
+```
+
+Data needs splitting into summer diversity (period 1) and winter diversity 
+(period 2).
+
+```{r split data between summer and winter}
+# Reshape data to wide format
+diversity_data <- bird_data_grouped %>%
+  pivot_wider(names_from = species, values_from = count, values_fill = 0)
+head(diversity_data)
+
+# Split data into summer and winter based on 'period'
+summer_data <- diversity_data %>% dplyr::filter(period == 1)
+winter_data <- diversity_data %>% dplyr::filter(period == 2)
+
+filter_birds <- function(data) {
+  meta_cols <- c("transect", "period", "water")
+  species_cols <- setdiff(colnames(data), meta_cols)
+
+  # Keep species columns where at least one value > 0.01
+  keep_species <- species_cols[colSums(data[, species_cols] > 0.01) > 0]
+
+  # Return data with meta columns + relevant species
+  data[, c(meta_cols, keep_species)]
+}
+
+# Apply the function to both summer and winter data
+summer_data_filtered <- filter_birds(summer_data)
+winter_data_filtered <- filter_birds(winter_data)
+```
+
+```{r summer indicies}
+# Check structure
+str(summer_data_filtered)
+
+# Species start at column 4 and end at column 67
+summer_species_columns <- 4:67
+
+# Calculate the Shannon, Simpson, Pielou's Evenness, Species Richness, 
+# and Total Species Richness
+summer_data_filtered <- summer_data_filtered %>%
+  mutate(
+    # Shannon Index
+    shannon_index = diversity(summer_data_filtered[, summer_species_columns], index = "shannon"),
+    # Simpson Index
+    simpson_index = diversity(summer_data_filtered[, summer_species_columns], index = "simpson"),
+    # Species Richness (total number of species observed, i.e., count of non-zero species in each transect)
+    species_richness = apply(summer_data_filtered[, summer_species_columns], 1, function(x) sum(x > 0.1)),
+    
+    # Pielou's Evenness: H' / log(S), where S is species richness
+    pielou_evenness = shannon_index / log(species_richness),
+  )
+
+#
+print(head(summer_data_filtered))
+
+# save df 
+summer_subset_data <- summer_data_filtered[, c("transect", "water", "species_richness")]
+write.csv(summer_subset_data, "summer_subset_data.csv", row.names = TRUE)
+```
+
+```{r winter indicies}
+# Check structure
+str(winter_data_filtered)
+
+# Species start at column 4 and end at column 63
+winter_species_columns <- 4:63
+
+# Calculate the Shannon, Simpson, Pielou's Evenness, Species Richness, Mean Species, and Total Species Richness
+winter_data_filtered <- winter_data_filtered %>%
+  mutate(
+    # Shannon Index
+    shannon_index = diversity(winter_data_filtered[, winter_species_columns], index = "shannon"),
+    # Simpson Index
+    simpson_index = diversity(winter_data_filtered[, winter_species_columns], index = "simpson"),
+    # Species Richness (total number of species observed, i.e., count of non-zero species in each transect)
+    species_richness = apply(winter_data_filtered[, winter_species_columns], 1, function(x) sum(x > 0.1)),
+    # Pielou's Evenness: H' / log(S), where S is species richness
+    pielou_evenness = shannon_index / log(species_richness),
+  )
+
+#
+print(head(winter_data_filtered))
+
+# save df
+winter_subset_data <- winter_data_filtered[, c("transect", "water", "species_richness")]
+write.csv(winter_subset_data, "winter_subset_data.csv", row.names = TRUE)
+```
+
+```{r setup pairing for analysis}
+# Summer
+summer_data <- summer_data_filtered %>%
+  arrange(transect) %>%
+  mutate(pairing = case_when(
+    transect == 1  ~ 1,
+    transect == 2  ~ 1,
+    transect == 3  ~ 2,
+    transect == 4  ~ 2,
+    transect == 5  ~ 3,
+    transect == 6  ~ 3,
+    transect == 7  ~ 4,
+    transect == 8  ~ 4,
+    transect == 9  ~ 5,
+    transect == 10 ~ 5,
+    transect == 11 ~ 6,
+    transect == 12 ~ 6,
+    transect == 13 ~ 7,
+    transect == 14 ~ 7,
+    transect == 15 ~ 8,
+    transect == 16 ~ 8,
+    transect == 17 ~ 9,
+    transect == 18 ~ 9,
+    transect == 19 ~ 10,
+    transect == 20 ~ 10,
+    transect == 21 ~ 11,
+    transect == 22 ~ 11
+  ))
+
+# Winter
+winter_data <- winter_data_filtered %>%
+  arrange(transect) %>%
+  mutate(pairing = case_when(
+    transect == 1  ~ 1,
+    transect == 2  ~ 1,
+    transect == 3  ~ 2,
+    transect == 4  ~ 2,
+    transect == 5  ~ 3,
+    transect == 6  ~ 3,
+    transect == 7  ~ 4,
+    transect == 8  ~ 4,
+    transect == 9  ~ 5,
+    transect == 10 ~ 5,
+    transect == 11 ~ 6,
+    transect == 12 ~ 6,
+    transect == 13 ~ 7,
+    transect == 14 ~ 7,
+    transect == 15 ~ 8,
+    transect == 16 ~ 8,
+    transect == 17 ~ 9,
+    transect == 18 ~ 9,
+    transect == 19 ~ 10,
+    transect == 20 ~ 10,
+    transect == 21 ~ 11,
+    transect == 22 ~ 11
+  ))
+```
+
+```{r summer diagnostics}
+# Function to generate histograms, boxplots, and Q-Q plots by period and water condition
+generate_plots_by_period <- function(data, metric, metric_label) {
+  
+  # Histogram by period and water
+  hist_plot <- ggplot(data, aes_string(x = metric, fill = "water")) +
+    geom_histogram(color = "black", bins = 10, alpha = 0.7) +
+    labs(title = paste("Histogram of", metric_label, "by Period and Water Condition"),
+         x = metric_label, y = "Frequency") +
+    facet_wrap(~ period + water, scales = "free", ncol = 2) +
+    scale_fill_manual(values = c("lightblue", "lightgreen")) +
+    theme_minimal()
+  
+  print(hist_plot)
+
+  # Boxplot by period and water
+  box_plot <- ggplot(data, aes_string(x = "period", y = metric, fill = "water")) +
+    geom_boxplot(alpha = 0.7, outlier.shape = 16, outlier.size = 2) +
+    labs(title = paste("Boxplot of", metric_label, "by Period and Water Condition"),
+         x = "Period", y = metric_label) +
+    facet_wrap(~ water) +
+    scale_fill_manual(values = c("lightblue", "lightgreen")) +
+    theme_minimal()
+  
+  print(box_plot)
+
+  # Q-Q plot by period and water
+  qq_plot <- ggplot(data, aes_string(sample = metric, color = "water")) +
+    stat_qq() +
+    stat_qq_line() +
+    labs(title = paste("Q-Q Plot of", metric_label, "by Period and Water Condition"),
+         x = "Theoretical Quantiles", y = "Sample Quantiles") +
+    facet_wrap(~ period + water, scales = "free", ncol = 2) +
+    scale_color_manual(values = c("lightblue", "lightgreen")) +
+    theme_minimal()
+  
+  print(qq_plot)
+}
+
+# Run the function for each diversity metric
+
+# Shannon Index
+generate_plots_by_period(summer_data, "shannon_index", "Shannon Index")
+
+# Simpson Index
+generate_plots_by_period(summer_data, "simpson_index", "Simpson Index")
+
+# Pielou's Evenness
+generate_plots_by_period(summer_data, "pielou_evenness", "Pielou's Evenness")
+
+# Total Species Richness
+generate_plots_by_period(summer_data, "species_richness", "Total Species Richness")
+```
+
+```{r winter diagnostics}
+# Function to generate histograms, boxplots, and Q-Q plots by period and water condition
+generate_plots_by_period <- function(data, metric, metric_label) {
+  
+  # Histogram by period and water
+  hist_plot <- ggplot(data, aes_string(x = metric, fill = "water")) +
+    geom_histogram(color = "black", bins = 10, alpha = 0.7) +
+    labs(title = paste("Histogram of", metric_label, "by Period and Water Condition"),
+         x = metric_label, y = "Frequency") +
+    facet_wrap(~ period + water, scales = "free", ncol = 2) +
+    scale_fill_manual(values = c("lightblue", "lightgreen")) +
+    theme_minimal()
+  
+  print(hist_plot)
+
+  # Boxplot by period and water
+  box_plot <- ggplot(data, aes_string(x = "period", y = metric, fill = "water")) +
+    geom_boxplot(alpha = 0.7, outlier.shape = 16, outlier.size = 2) +
+    labs(title = paste("Boxplot of", metric_label, "by Period and Water Condition"),
+         x = "Period", y = metric_label) +
+    facet_wrap(~ water) +
+    scale_fill_manual(values = c("lightblue", "lightgreen")) +
+    theme_minimal()
+  
+  print(box_plot)
+
+  # Q-Q plot by period and water
+  qq_plot <- ggplot(data, aes_string(sample = metric, color = "water")) +
+    stat_qq() +
+    stat_qq_line() +
+    labs(title = paste("Q-Q Plot of", metric_label, "by Period and Water Condition"),
+         x = "Theoretical Quantiles", y = "Sample Quantiles") +
+    facet_wrap(~ period + water, scales = "free", ncol = 2) +
+    scale_color_manual(values = c("lightblue", "lightgreen")) +
+    theme_minimal()
+  
+  print(qq_plot)
+}
+
+# Run the function for each diversity metric
+
+# Shannon Index
+generate_plots_by_period(winter_data, "shannon_index", "Shannon Index")
+
+# Simpson Index
+generate_plots_by_period(winter_data, "simpson_index", "Simpson Index")
+
+# Pielou's Evenness
+generate_plots_by_period(winter_data, "pielou_evenness", "Pielou's Evenness")
+
+# Total Species Richness
+generate_plots_by_period(winter_data, "species_richness", "Total Species Richness")
+```
+Data is non-parametric.
+
+```{r summer diversity paired}
+# Reshape the data so 'with water' and 'without water' are in the same row
+paired_data_s <- summer_data %>%
+  group_by(pairing, period) %>%
+  summarise(
+    # Shannon Index
+    with_water_shannon = first(shannon_index[water == "Yes"], default = NA),
+    without_water_shannon = first(shannon_index[water == "No"], default = NA),
+    
+    # Simpson Index
+    with_water_simpson = first(simpson_index[water == "Yes"], default = NA),
+    without_water_simpson = first(simpson_index[water == "No"], default = NA),
+    
+    # Pielou's Evenness
+    with_water_evenness = first(pielou_evenness[water == "Yes"], default = NA),
+    without_water_evenness = first(pielou_evenness[water == "No"], default = NA),
+    
+    # Total Species Richness (count of unique species for each condition)
+    with_water_total_richness = first(species_richness[water == "Yes"], default = NA),
+    without_water_total_richness = first(species_richness[water == "No"], default = NA)
+  ) %>%
+  drop_na()  # Remove rows where either with_water or without_water is NA
+
+```
+
+```{r summer symmetry check}
+# Add difference columns to paired data
+paired_data_s <- paired_data_s %>%
+  mutate(
+    diff_shannon = with_water_shannon - without_water_shannon,
+    diff_simpson = with_water_simpson - without_water_simpson,
+    diff_evenness = with_water_evenness - without_water_evenness,
+    diff_richness = with_water_total_richness - without_water_total_richness
+  )
+
+# 
+p1 <- ggplot(paired_data_s, aes(x = diff_shannon)) +
+  geom_histogram(binwidth = 0.1, fill = "skyblue", color = "black") +
+  labs(title = "Difference in Shannon Diversity (With - Without Water)",
+       x = "Difference", y = "Frequency") +
+  theme_minimal()
+
+p2 <- ggplot(paired_data_s, aes(x = diff_simpson)) +
+  geom_histogram(binwidth = 0.01, fill = "skyblue", color = "black") +
+  labs(title = "Difference in Simpson Diversity (With - Without Water)",
+       x = "Difference", y = "Frequency") +
+  theme_minimal()
+
+p3 <- ggplot(paired_data_s, aes(x = diff_evenness)) +
+  geom_histogram(binwidth = 0.01, fill = "skyblue", color = "black") +
+  labs(title = "Difference in Evenness (With - Without Water)",
+       x = "Difference", y = "Frequency") +
+  theme_minimal()
+
+p4 <- ggplot(paired_data_s, aes(x = diff_richness)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
+  labs(title = "Difference in Richness (With - Without Water)",
+       x = "Difference", y = "Frequency") +
+  theme_minimal()
+
+# Plot all histograms in a grid
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+
+# Q-Q plots for each metric
+qq_shannon <- ggplot(paired_data_s, aes(sample = diff_shannon)) +
+  stat_qq() + stat_qq_line(color = "red") +
+  labs(title = "Q-Q Plot: Shannon Differences") +
+  theme_minimal()
+
+qq_simpson <- ggplot(paired_data_s, aes(sample = diff_simpson)) +
+  stat_qq() + stat_qq_line(color = "red") +
+  labs(title = "Q-Q Plot: Simpson Differences") +
+  theme_minimal()
+
+qq_evenness <- ggplot(paired_data_s, aes(sample = diff_evenness)) +
+  stat_qq() + stat_qq_line(color = "red") +
+  labs(title = "Q-Q Plot: Evenness Differences") +
+  theme_minimal()
+
+qq_richness <- ggplot(paired_data_s, aes(sample = diff_richness)) +
+  stat_qq() + stat_qq_line(color = "red") +
+  labs(title = "Q-Q Plot: Richness Differences") +
+  theme_minimal()
+
+# Plot all Q-Q plots in a grid
+grid.arrange(qq_shannon, qq_simpson, qq_evenness, qq_richness, ncol = 2)
+```
+
+```{r winter diversity paired}
+# Reshape the data so we have 'with water' and 'without water' in the same row
+paired_data_w <- winter_data %>%
+  group_by(pairing, period) %>%
+  summarise(
+    # Shannon Index
+    with_water_shannon = first(shannon_index[water == "Yes"], default = NA),
+    without_water_shannon = first(shannon_index[water == "No"], default = NA),
+    
+    # Simpson Index
+    with_water_simpson = first(simpson_index[water == "Yes"], default = NA),
+    without_water_simpson = first(simpson_index[water == "No"], default = NA),
+    
+    # Pielou's Evenness
+    with_water_evenness = first(pielou_evenness[water == "Yes"], default = NA),
+    without_water_evenness = first(pielou_evenness[water == "No"], default = NA),
+    
+    # Total Species Richness (count of unique species for each condition)
+    with_water_total_richness = first(species_richness[water == "Yes"], default = NA),
+    without_water_total_richness = first(species_richness[water == "No"], default = NA)
+  ) %>%
+  drop_na()  # Remove rows where either with_water or without_water is NA
+
+```
+
+```{r winter symmetry}
+# Add difference columns to paired data
+paired_data_w <- paired_data_w %>%
+  mutate(
+    diff_shannon = with_water_shannon - without_water_shannon,
+    diff_simpson = with_water_simpson - without_water_simpson,
+    diff_evenness = with_water_evenness - without_water_evenness,
+    diff_richness = with_water_total_richness - without_water_total_richness
+  )
+
+# 
+p1 <- ggplot(paired_data_w, aes(x = diff_shannon)) +
+  geom_histogram(binwidth = 0.1, fill = "skyblue", color = "black") +
+  labs(title = "Difference in Shannon Diversity (With - Without Water)",
+       x = "Difference", y = "Frequency") +
+  theme_minimal()
+
+p2 <- ggplot(paired_data_w, aes(x = diff_simpson)) +
+  geom_histogram(binwidth = 0.01, fill = "skyblue", color = "black") +
+  labs(title = "Difference in Simpson Diversity (With - Without Water)",
+       x = "Difference", y = "Frequency") +
+  theme_minimal()
+
+p3 <- ggplot(paired_data_w, aes(x = diff_evenness)) +
+  geom_histogram(binwidth = 0.01, fill = "skyblue", color = "black") +
+  labs(title = "Difference in Evenness (With - Without Water)",
+       x = "Difference", y = "Frequency") +
+  theme_minimal()
+
+p4 <- ggplot(paired_data_w, aes(x = diff_richness)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black") +
+  labs(title = "Difference in Richness (With - Without Water)",
+       x = "Difference", y = "Frequency") +
+  theme_minimal()
+
+# Plot all histograms in a grid
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+
+# Q-Q plots for each metric
+qq_shannon <- ggplot(paired_data_w, aes(sample = diff_shannon)) +
+  stat_qq() + stat_qq_line(color = "red") +
+  labs(title = "Q-Q Plot: Shannon Differences") +
+  theme_minimal()
+
+qq_simpson <- ggplot(paired_data_w, aes(sample = diff_simpson)) +
+  stat_qq() + stat_qq_line(color = "red") +
+  labs(title = "Q-Q Plot: Simpson Differences") +
+  theme_minimal()
+
+qq_evenness <- ggplot(paired_data_w, aes(sample = diff_evenness)) +
+  stat_qq() + stat_qq_line(color = "red") +
+  labs(title = "Q-Q Plot: Evenness Differences") +
+  theme_minimal()
+
+qq_richness <- ggplot(paired_data_w, aes(sample = diff_richness)) +
+  stat_qq() + stat_qq_line(color = "red") +
+  labs(title = "Q-Q Plot: Richness Differences") +
+  theme_minimal()
+
+# Plot all Q-Q plots in a grid
+grid.arrange(qq_shannon, qq_simpson, qq_evenness, qq_richness, ncol = 2)
+```
+
+Data is non-parametric but the difference's around zero are not always 
+symmetrical so consider the impact of outliers in results. 
+
+```{r summer wilcoxon}
+# Wilcoxon Signed-Rank Test for Shannon Index
+shannon_wilcox_test_result <- wilcox.test(paired_data_s$with_water_shannon, paired_data_s$without_water_shannon, paired = TRUE)
+print("Shannon Index Wilcoxon Test:")
+print(shannon_wilcox_test_result)
+
+# Wilcoxon Signed-Rank Test for Simpson Index
+simpson_wilcox_test_result <- wilcox.test(paired_data_s$with_water_simpson, paired_data_s$without_water_simpson, paired = TRUE)
+print("Simpson Index Wilcoxon Test:")
+print(simpson_wilcox_test_result)
+
+# Wilcoxon Signed-Rank Test for Pielou's Evenness
+evenness_wilcox_test_result <- wilcox.test(paired_data_s$with_water_evenness, paired_data_s$without_water_evenness, paired = TRUE)
+print("Pielou's Evenness Wilcoxon Test:")
+print(evenness_wilcox_test_result)
+
+# Wilcoxon Signed-Rank Test for Total Species Richness
+total_species_richness_wilcox_test_result <- wilcox.test(paired_data_s$with_water_total_richness, paired_data_s$without_water_total_richness, paired = TRUE)
+print("Total Species Richness Wilcoxon Test:")
+print(total_species_richness_wilcox_test_result)
+
+# Tidy Results into a table
+tidy_results_summer <- data.frame(
+  Metric = c("Shannon Index", "Simpson Index", "Pielou's Evenness", "Total Species Richness"),
+  Statistic = c(
+    shannon_wilcox_test_result$statistic,
+    simpson_wilcox_test_result$statistic,
+    evenness_wilcox_test_result$statistic,
+    total_species_richness_wilcox_test_result$statistic
+  ),
+  P_Value = c(
+    shannon_wilcox_test_result$p.value,
+    simpson_wilcox_test_result$p.value,
+    evenness_wilcox_test_result$p.value,
+    total_species_richness_wilcox_test_result$p.value
+  ),
+  stringsAsFactors = FALSE
+)
+
+#
+print(tidy_results_summer)
+```
+
+```{r boxplot metrics summer}
+# Pivot to long format
+long_df <- paired_data_s %>%
+  select(pairing,
+         with_water_shannon, without_water_shannon,
+         with_water_simpson, without_water_simpson,
+         with_water_evenness, without_water_evenness,
+         with_water_total_richness, without_water_total_richness) %>%
+  pivot_longer(
+    cols = -pairing,
+    names_to = c("Condition", "Metric"),
+    names_pattern = "(with_water|without_water)_(.*)",
+    values_to = "Value"
+  ) %>%
+  mutate(
+  Condition = dplyr::recode(Condition,
+                            "with_water" = "With Water",
+                            "without_water" = "Without Water"),
+  Metric = dplyr::recode(Metric,
+                         "shannon" = "Shannon Index",
+                         "simpson" = "Simpson Index",
+                         "evenness" = "Pielou's Evenness",
+                         "total_richness" = "Species Richness")
+)
+
+
+# Function to create paired boxplot with lines
+make_plot <- function(metric_name) {
+  ggplot(dplyr::filter(long_df, Metric == metric_name),
+         aes(x = Condition, y = Value, fill = Condition)) +
+    geom_boxplot(alpha = 1, outlier.shape = NA) +
+    geom_line(aes(group = pairing), color = "gray40", linewidth = 0.5, alpha = 0.7) +
+    geom_point(aes(group = pairing), size = 2, alpha = 0.3) +
+    scale_fill_manual(values = c("With Water" = "#2A758E",  
+                                 "Without Water" = "#65A73D"))  +  
+    scale_y_continuous(labels = number_format(accuracy = 0.01)) +
+    labs(title = , x = NULL, y = metric_name) +
+    theme_bw() +
+    theme(legend.position = "none")
+}
+
+# Create each plot
+p1_s <- make_plot("Shannon Index")
+p2 <- make_plot("Simpson Index")
+p3 <- make_plot("Pielou's Evenness")
+p4_s <- make_plot("Species Richness")
+
+# Combine in 2x2 layout
+(p1_s | p2) / (p3 | p4_s)
+
+# Create the 2x2 plot layout
+final_plot <- (p1_s | p2) / (p3 | p4_s)
+
+# Save as PNG
+ggsave("summer_metrics_plot.png",
+       plot = final_plot,
+       width = 9, height = 9,  # A4 in inches (portrait)
+       dpi = 300,
+       units = "in")
+
+write_csv(tidy_results_summer, "diversity_results_summer.csv")
+```
+
+
+```{r wilcoxon winter}
+# Wilcoxon Signed-Rank Test for Shannon Index
+shannon_wilcox_test_result <- wilcox.test(paired_data_w$with_water_shannon, paired_data_w$without_water_shannon, paired = TRUE)
+print("Shannon Index Wilcoxon Test:")
+print(shannon_wilcox_test_result)
+
+# Wilcoxon Signed-Rank Test for Simpson Index
+simpson_wilcox_test_result <- wilcox.test(paired_data_w$with_water_simpson, paired_data_w$without_water_simpson, paired = TRUE)
+print("Simpson Index Wilcoxon Test:")
+print(simpson_wilcox_test_result)
+
+# Wilcoxon Signed-Rank Test for Pielou's Evenness
+evenness_wilcox_test_result <- wilcox.test(paired_data_w$with_water_evenness, paired_data_w$without_water_evenness, paired = TRUE)
+print("Pielou's Evenness Wilcoxon Test:")
+print(evenness_wilcox_test_result)
+
+# Wilcoxon Signed-Rank Test for Total Species Richness
+total_species_richness_wilcox_test_result <- wilcox.test(paired_data_w$with_water_total_richness, paired_data_w$without_water_total_richness, paired = TRUE)
+print("Total Species Richness Wilcoxon Test:")
+print(total_species_richness_wilcox_test_result)
+
+# Tidy Results into a table
+tidy_results_winter <- data.frame(
+  Metric = c("Shannon Index", "Simpson Index", "Pielou's Evenness", "Total Species Richness"),
+  Statistic = c(
+    shannon_wilcox_test_result$statistic,
+    simpson_wilcox_test_result$statistic,
+    evenness_wilcox_test_result$statistic,
+    total_species_richness_wilcox_test_result$statistic
+  ),
+  P_Value = c(
+    shannon_wilcox_test_result$p.value,
+    simpson_wilcox_test_result$p.value,
+    evenness_wilcox_test_result$p.value,
+    total_species_richness_wilcox_test_result$p.value
+  ),
+  stringsAsFactors = FALSE
+)
+
+#
+print(tidy_results_winter)
+write_csv(tidy_results_winter, "diversity_results_winter.csv")
+```
+
+```{r boxplot metrics winter}
+# Pivot to long format
+long_df <- paired_data_w %>%
+  select(pairing,
+         with_water_shannon, without_water_shannon,
+         with_water_simpson, without_water_simpson,
+         with_water_evenness, without_water_evenness,
+         with_water_total_richness, without_water_total_richness) %>%
+  pivot_longer(
+    cols = -pairing,
+    names_to = c("Condition", "Metric"),
+    names_pattern = "(with_water|without_water)_(.*)",
+    values_to = "Value"
+  ) %>%
+  mutate(
+  Condition = dplyr::recode(Condition,
+                            "with_water" = "With Water",
+                            "without_water" = "Without Water"),
+  Metric = dplyr::recode(Metric,
+                         "shannon" = "Shannon Index",
+                         "simpson" = "Simpson Index",
+                         "evenness" = "Pielou's Evenness",
+                         "total_richness" = "Species Richness")
+)
+
+# Function to create paired boxplot with lines
+make_plot <- function(metric_name, y_limits = NULL) {
+  ggplot(dplyr::filter(long_df, Metric == metric_name),
+         aes(x = Condition, y = Value, fill = Condition)) +
+    geom_boxplot(alpha = 1, outlier.shape = NA) +
+    geom_line(aes(group = pairing), color = "gray40", linewidth = 0.5, alpha = 0.7) +
+    geom_point(aes(group = pairing), size = 2, alpha = 0.3) +
+    scale_fill_manual(values = c("With Water" = "#2A758E",
+                                 "Without Water" = "#65A73D")) +
+    scale_y_continuous(labels = number_format(accuracy = 0.01),
+                       limits = y_limits) +
+    labs(title =, x = NULL, y = metric_name) +
+    theme_bw() +
+    theme(legend.position = "none")
+}
+
+# Create each plot
+p1 <- make_plot("Shannon Index")
+p2 <- make_plot("Simpson Index")
+p3 <- make_plot("Pielou's Evenness")
+p4_w <- make_plot("Species Richness")
+
+# Combine in 2x2 layout
+(p1 | p2) / (p3 | p4_w)
+
+# Create the 2x2 plot layout
+final_plot <- (p1 | p2) / (p3 | p4_w)
+
+# Save as PNG
+ggsave("winter_metrics_plot.png",
+       plot = final_plot,
+       width = 9, height = 9,  # A4 in inches (portrait)
+       dpi = 300,
+       units = "in")
+
+# Combine in 2x2 layout
+p4_s <- p4_s + ylim(0, 42)  # Adjust the range as needed
+p4_w <- p4_w + ylim(0, 42)
+
+(p4_s | p4_w)
+
+# Create the 2x2 plot layout
+final_plot_richness <- (p4_s | p4_w)
+
+## final formatting
+
+# Left plot: Keep Y axis, nudge title
+p4_s <- p4_s +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.text.x  = element_text(size = 14),
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),
+    axis.text.y  = element_text(size = 14)
+  )
+
+# Right plot: Drop Y axis completely
+p4_w <- p4_w +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.text.x  = element_text(size = 14),
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+# Combine with patchwork
+final_plot_richness <- (p4_s | p4_w)
+
+ggsave("summer_winter_richness.png", plot = final_plot_richness, width = 12, height = 8, units = "in", dpi = 300)
+
+```
+
+(Skip chunk unless formatting plots)
+```{r combining_with_functional}
+# Shared themes
+shared_theme_left <- theme_bw() +
+  theme(
+    axis.title.x = element_text(size = 16),
+    axis.text.x  = element_text(size = 16),
+    axis.title.y = element_text(size = 16, margin = margin(r = 15)),
+    axis.text.y  = element_text(size = 16),
+    legend.position = "none",
+    panel.grid = element_blank(),
+    plot.margin = margin(5, 5, 5, 5)
+  )
+
+shared_theme_right <- shared_theme_left +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+# Apply themes + hide top x-axis labels (but preserve spacing)
+p4_s <- p4_s + shared_theme_left +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_text(color = NA),
+    axis.ticks.x = element_blank()
+  )
+
+p4_w <- p4_w + shared_theme_right +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_text(color = NA),
+    axis.ticks.x = element_blank()
+  )
+
+# Bottom row (x-axis shown)
+p1_avtd_s <- p1_avtd_s + shared_theme_left
+p1_avtd_w <- p1_avtd_w + shared_theme_right
+
+# Combine into final layout
+final_plot_richness <- (p4_s | p4_w) / (p1_avtd_s | p1_avtd_w)
+final_plot_richness
+print(final_plot_richness)
+ggsave("final_diversity_plots.png", plot = final_plot_richness, width = 12, height = 12, units = "in", dpi = 300)
+
+```
+
+## Simper Analysis
+
+```{r summer simper data preperation}
+# Define non-species and species columns
+non_species_cols <- 1:3  
+species_cols <- 4:67
+
+# Create a logical vector to identify non-zero sum columns in the species data
+non_zero_species_cols <- colSums(summer_data_filtered[, species_cols]) > 0
+
+# Combine the logical vectors for non-species columns and non-zero species columns
+# Convert logical index to numeric to subset columns correctly
+all_cols <- c(non_species_cols, which(non_zero_species_cols) + min(species_cols) - 1)
+
+# Subset summer_data using the corrected all_cols vector
+summer_data <- summer_data_filtered[, all_cols]
+
+# View the data to confirm no zero-sum columns remain
+View(summer_data)
+str(summer_data)
+```
+
+```{r summer simper quality check}
+# Pull list from original df
+period_1_species <- bird %>%
+  dplyr::filter(period == 1) %>%
+  pull(species) %>%
+  unique()
+
+# Take column names to get filtered species list
+species_names_summer_data <- names(summer_data)[4:67]
+
+# Compare the lists to ensure the data handling was accurate and 
+# no information was lost
+missing_in_summer_data <- setdiff(period_1_species, species_names_summer_data)
+missing_in_period_1_species <- setdiff(species_names_summer_data, period_1_species)
+
+# Check
+
+print("Species in period 1 (original dataset) not in summer_data")
+print(missing_in_summer_data)
+print("Species in summer_data not in period 1 (original dataset) species list")
+print(missing_in_period_1_species)
+
+```
+
+```{r summer simper data analysis}
+# Step 1: Run SIMPER Analysis
+species_data <- summer_data[, 4:67]  # Adjust species column range as necessary
+grouping <- summer_data$water        # "Yes" for with water, "No" for without water
+
+# Run SIMPER analysis to see which species contribute most to the differences
+simper_result <- simper(species_data, grouping)
+
+# Summarize and display the SIMPER results
+simper_summary <- summary(simper_result)$Yes_No
+print("SIMPER Results Summary:")
+print(simper_summary)
+
+# Step 2: Convert SIMPER Results to Data Frame
+simper_df <- data.frame(
+  species = rownames(simper_summary),
+  average = simper_summary[, "average"],
+  sd = simper_summary[, "sd"],
+  ratio = simper_summary[, "ratio"],
+  ava = simper_summary[, "ava"],
+  avb = simper_summary[, "avb"],
+  cumsum = simper_summary[, "cumsum"],
+  p = simper_summary[, "p"]
+)
+
+# Step 3: Add Significance Level
+simper_df <- simper_df %>%
+  mutate(
+    significance = case_when(
+      p < 0.001 ~ "***",  # Highly significant
+      p < 0.01  ~ "**",   # Moderately significant
+      p < 0.05  ~ "*",    # Significant
+      TRUE ~ ""           # Not significant
+    )
+  )
+
+# Step 4: Filter Significant Species (p < 0.05)
+significant_species_summer <- simper_df %>%
+  dplyr::filter(p < 0.05)
+
+# Display the filtered significant species
+print("Significant Species (p < 0.05):")
+print(significant_species_summer)
+
+```
+
+```{r winter simper data preperation}
+# Define non-species and species columns
+non_species_cols <- 1:3 
+species_cols <- 4:63  
+
+# Create a logical vector to identify non-zero sum columns in the species data
+non_zero_species_cols <- colSums(winter_data_filtered[, species_cols]) > 0
+
+# Convert logical index to numeric to subset columns correctly
+all_cols <- c(non_species_cols, which(non_zero_species_cols) + min(species_cols) - 1)
+
+# Subset winter_data using the corrected all_cols vector
+winter_data <- winter_data_filtered[, all_cols]
+
+# Optional: View the data to confirm no zero-sum columns remain
+View(winter_data)
+```
+
+```{r winter simper quality check}
+# Pull list from original df
+period_2_species <- bird %>%
+  dplyr::filter(period == 2) %>%
+  pull(species) %>%
+  unique()
+
+# Take column names to get filtered species list
+species_names_winter_data <- names(winter_data)[4:63]
+
+# Compare the lists to ensure the data handling was accurate and no information was lost
+missing_in_winter_data <- setdiff(period_2_species, species_names_winter_data)
+missing_in_period_2_species <- setdiff(species_names_winter_data, period_2_species)
+
+# Check
+print("Species in period 2 not in winter_data")
+print(missing_in_winter_data)
+print("Species in winter_data not in period 2 species list")
+print(missing_in_period_2_species)
+
+```
+
+```{r winter simper analysis}
+# Run SIMPER Analysis
+species_data <- winter_data [, 4:63]
+grouping <- winter_data$water        
+
+# Run SIMPER analysis to see which species contribute most to the differences
+simper_result <- simper(species_data, grouping)
+
+# SIMPER results
+simper_summary <- summary(simper_result)$Yes_No
+print("SIMPER Results Summary:")
+print(simper_summary)
+
+# Convert SIMPER Results to df
+simper_df <- data.frame(
+  species = rownames(simper_summary),
+  average = simper_summary[, "average"],
+  sd = simper_summary[, "sd"],
+  ratio = simper_summary[, "ratio"],
+  ava = simper_summary[, "ava"],
+  avb = simper_summary[, "avb"],
+  cumsum = simper_summary[, "cumsum"],
+  p = simper_summary[, "p"]
+)
+
+# Add significance
+simper_df <- simper_df %>%
+  mutate(
+    significance = case_when(
+      p < 0.001 ~ "***",  # Highly significant
+      p < 0.01  ~ "**",   # Moderately significant
+      p < 0.05  ~ "*",    # Significant
+      TRUE ~ ""           # Not significant
+    )
+  )
+
+# Filter Significant Species (p < 0.05)
+significant_species_winter <- simper_df %>%
+  dplyr::filter(p < 0.05)
+
+#
+print(significant_species_winter)
+```
+
+## Fisher's Exact 
+
+```{r fisher's data prep}
+# Summer
+# Extract columns
+s_species_list <- colnames(summer_data)[4:67]
+
+# Convert
+summer_long <- summer_data %>%
+  pivot_longer(
+    cols = -c(transect, period, water),
+    names_to = "Species",
+    values_to = "Count"
+  ) %>%
+  dplyr::filter(Species %in% s_species_list) %>%
+  group_by(Species)
+
+# Winter
+# Extract columns
+w_species_list <- colnames(winter_data)[4:63]
+
+# Convert
+winter_long <- winter_data %>%
+  pivot_longer(
+    cols = -c(transect, period, water),
+    names_to = "Species",
+    values_to = "Count"
+  ) %>%
+  dplyr::filter(Species %in% w_species_list) %>%
+  group_by(Species)
+```
+
+```{r summer pres_ab fisher's}
+s_presence_absence <- summer_long %>%
+  mutate(Presence = ifelse(Count > 0, 1, 0))  # Convert Count to 1 (presence) or 0 (absence)
+
+#
+print(head(s_presence_absence))
+
+s_presence_absence_summary <- s_presence_absence %>%
+  group_by(Species, water) %>%
+  summarise(
+    Presence_Count = sum(Presence),          # Count of presences (1s)
+    Absence_Count = sum(1 - Presence),      # Count of absences (0s)
+    Zero_Count = sum(Count == 0),           # Specific count of zeros in the original Count column
+    Total_Count = n(),                      # Total number of observations
+    .groups = "drop"                        # Ungroup after summarizing
+  )
+
+#
+print(s_presence_absence_summary)
+```
+
+```{r fisher's test barn swallow}
+# Filter data for barn swallow
+single_species_data <- s_presence_absence_summary %>%
+  dplyr::filter(Species == "Barn Swallow")
+
+# Check structure
+print(single_species_data)
+
+# 
+contingency_table <- matrix(c(
+  sum(single_species_data$Presence_Count[single_species_data$water == "Yes"]),
+  sum(single_species_data$Absence_Count[single_species_data$water == "Yes"]),
+  sum(single_species_data$Presence_Count[single_species_data$water == "No"]),
+  sum(single_species_data$Absence_Count[single_species_data$water == "No"])
+), nrow = 2, byrow = TRUE)
+
+#
+print(contingency_table)
+
+# Perform Fisher's Exact Test
+test_result <- fisher.test(contingency_table)
+
+# Output the results
+print(test_result)
+```
+
+```{r fisher's test all summer}
+# Loop through each species and perform Fisher's Exact Test
+s_fisher_results <- s_presence_absence_summary %>%
+  group_by(Species) %>%
+  summarise(
+    p_value = fisher.test(matrix(c(
+      Presence_Count[water == "Yes"],
+      Absence_Count[water == "Yes"],
+      Presence_Count[water == "No"],
+      Absence_Count[water == "No"]
+    ), nrow = 2))$p.value
+  )
+
+# 
+print(s_fisher_results) # (Check barn swallow is the same as above)
+
+ggplot(s_presence_absence_summary, aes(x = Species, y = Presence_Count, fill = water)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Presence Counts by Species and Water Condition",
+       x = "Species", y = "Presence Count", fill = "Water Condition") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r fisher's test all winter}
+w_presence_absence <- winter_long %>%
+  mutate(Presence = ifelse(Count > 0, 1, 0))  # Convert Count to 1 (presence) or 0 (absence)
+
+#
+print(head(w_presence_absence))
+
+w_presence_absence_summary <- w_presence_absence %>%
+  group_by(Species, water) %>%
+  summarise(
+    Presence_Count = sum(Presence),          # Count of presences (1s)
+    Absence_Count = sum(1 - Presence),      # Count of absences (0s)
+    Zero_Count = sum(Count == 0),           # Specific count of zeros in the original Count column
+    Total_Count = n(),                      # Total number of observations
+    .groups = "drop"                        # Ungroup after summarising
+  )
+
+#
+print(w_presence_absence_summary)
+
+# Loop through each species and perform Fisher's Exact Test
+w_fisher_results <- w_presence_absence_summary %>%
+  group_by(Species) %>%
+  summarise(
+    p_value = fisher.test(matrix(c(
+      Presence_Count[water == "Yes"],
+      Absence_Count[water == "Yes"],
+      Presence_Count[water == "No"],
+      Absence_Count[water == "No"]
+    ), nrow = 2))$p.value
+  )
+
+#
+print(w_fisher_results)
+
+ggplot(w_presence_absence_summary, aes(x = Species, y = Presence_Count, fill = water)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Presence Counts by Species and Water Condition",
+       x = "Species", y = "Presence Count", fill = "Water Condition") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
