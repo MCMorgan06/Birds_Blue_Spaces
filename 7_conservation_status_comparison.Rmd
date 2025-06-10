@@ -1,0 +1,545 @@
+---
+title: "Bird Conservation Status"
+author: "Matthew Morgan"
+date: "2024-10-30"
+output: html_document
+---
+
+This code explores the data with BOCC5 conservation status, providing counts
+for each unique species with green, amber, red status.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages}
+library(dplyr)
+library(vegan)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(coin)
+library(gridExtra)
+library(patchwork)
+```
+
+```{r load data}
+data <- read_csv("~/Documents/Bird_Analysis_2024/R_bird_data/merged_data.csv", 
+                show_col_types = FALSE)
+```
+
+```{r pool summer}
+data <- data %>%
+  mutate(period = case_when(
+    period %in% c(1, 3, 4) ~ 1,
+    TRUE ~ period  # Keeps other values unchanged
+  ))
+```
+
+```{r group by bocc5} 
+boc_grouped <- data %>%
+  group_by(transect, period, water, species, bocc5) %>%
+  summarise(count = sum(count, na.rm = TRUE)) %>%
+  ungroup()
+
+# View the grouped data
+head(boc_grouped)
+sum(data$count)
+sort(unique(data$transect))
+sum(boc_grouped$count)
+sort(unique(boc_grouped$transect))
+sum(boc_grouped$count)
+```
+
+```{r aggreggate by status}
+bocc5_counts <- boc_grouped %>%
+  group_by(transect, period, bocc5, water) %>%
+  summarize(count = n(), .groups = "drop")
+bocc5_counts
+```
+
+```{r quality check}
+# Compare the total counts before and after grouping
+sum_before <- sum(data$count)
+sum_after <- sum(boc_grouped$count)
+
+cat("Total Count Before Grouping:", sum_before, "\n")
+cat("Total Count After Grouping:", sum_after, "\n")
+
+# Before grouping
+bocc5_before <- table(data$bocc5)
+
+# After grouping
+bocc5_after <- table(boc_grouped$bocc5)
+
+# Compare side by side
+comparison <- data.frame(
+  Category = names(bocc5_before),
+  Before = as.numeric(bocc5_before),
+  After = as.numeric(bocc5_after)
+)
+
+#
+print(comparison)
+
+#
+sum(bocc5_counts$count)
+table(bocc5_counts$bocc5)
+
+#
+table(bocc5_counts$bocc5) # (11*2)*2 - (pairs * condition)*season
+table(bocc5_counts$period) # (11*3)*2 - (pairs * status)*seasons
+sum(bocc5_counts$count)
+aggregate(count ~ bocc5, data = bocc5_counts, sum)
+```
+
+```{r add pairs}
+bocc5_counts<- bocc5_counts %>%
+  arrange(transect) %>%
+  mutate(pairing = case_when(
+    transect == 1  ~ 1,
+    transect == 2  ~ 1,
+    transect == 3  ~ 2,
+    transect == 4  ~ 2,
+    transect == 5  ~ 3,
+    transect == 6  ~ 3,
+    transect == 7  ~ 4,
+    transect == 8  ~ 4,
+    transect == 9  ~ 5,
+    transect == 10 ~ 5,
+    transect == 11 ~ 6,
+    transect == 12 ~ 6,
+    transect == 13 ~ 7,
+    transect == 14 ~ 7,
+    transect == 15 ~ 8,
+    transect == 16 ~ 8,
+    transect == 17 ~ 9,
+    transect == 18 ~ 9,
+    transect == 19 ~ 10,
+    transect == 20 ~ 10,
+    transect == 21 ~ 11,
+    transect == 22 ~ 11
+  ))
+bocc5_counts
+```
+
+```{r summer boxplots}
+# Assuming your data is in 'bocc5_counts'
+bocc5_counts <- bocc5_counts %>%
+  mutate(unique_pairing = paste(bocc5, pairing, sep = "_"))
+
+# View the updated data frame to confirm changes
+head(bocc5_counts)
+
+# Filtering data for period 1, category 'Green'
+green_data_period1 <- bocc5_counts %>%
+  filter(period == 1, bocc5 == "green") %>%
+  mutate(water = factor(water, levels = c("Yes", "No")))  # Set factor levels to control order
+
+# Create the box plot with points and lines
+ggplot_green_period1 <- ggplot(green_data_period1, aes(x = water, y = count, fill = water)) +
+  geom_boxplot(alpha = 1, outlier.shape = NA) +  
+  geom_point(aes(group = unique_pairing), size = 2, alpha = 0.3) +  
+  geom_line(aes(group = unique_pairing), color = "gray40", size = 0.5, alpha = 0.7) +  
+  scale_fill_manual(values = c("Yes" = "#2A758E", "No" = "#65A73D")) +  
+  scale_x_discrete(labels = c("Yes" = "With Water", "No" = "Without Water")) +
+  labs(title = "", y = "Count", x = "") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, hjust = 0.5),
+    axis.title.y = element_text(size = 14, hjust = 0.5, margin = margin(r = 15)),
+    axis.text.x = element_blank(),
+    axis.text.y = element_text(size = 14, color = "black"),
+    legend.position = "NA"
+  )
+
+#
+print(ggplot_green_period1)
+
+## Amber 
+
+# Filter data for Period 1 and Amber category
+amber_data_period1 <- bocc5_counts %>%
+  filter(period == 1, bocc5 == "amber") %>%
+  mutate(water = factor(water, levels = c("Yes", "No")))
+
+# Create the box plot with points and lines
+ggplot_amber_period1 <- ggplot(amber_data_period1, aes(x = water, y = count, fill = water)) +
+  geom_boxplot(alpha = 1, outlier.shape = NA) +
+  geom_point(aes(group = unique_pairing), size = 2, alpha = 0.3) +
+  geom_line(aes(group = unique_pairing), color = "gray40", size = 0.5, alpha = 0.7) +
+  scale_fill_manual(values = c("Yes" = "#2A758E", "No" = "#65A73D")) +
+  scale_x_discrete(labels = c("Yes" = "With Water", "No" = "Without Water")) +
+  labs(title = "", y = "Count", x = "Amber") +
+  theme_minimal() +
+  theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  axis.text.x = element_blank(),
+  axis.text.y = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.ticks.y = element_blank(),
+  legend.position = "NA"
+)
+
+#
+print(ggplot_amber_period1)
+
+## Red
+
+# Filter data for Period 1 and Amber category
+red_data_period1 <- bocc5_counts %>%
+  filter(period == 1, bocc5 == "red") %>%
+  mutate(water = factor(water, levels = c("Yes", "No")))
+
+# Create the box plot with points and lines
+ggplot_red_period1 <- ggplot(red_data_period1, aes(x = water, y = count, fill = water)) +
+  geom_boxplot(alpha = 1, outlier.shape = NA) +
+  geom_point(aes(group = unique_pairing), size = 2, alpha = 0.3) +
+  geom_line(aes(group = unique_pairing), color = "gray40", size = 0.5, alpha = 0.7) +
+  scale_fill_manual(values = c("Yes" = "#2A758E", "No" = "#65A73D")) +
+  scale_x_discrete(labels = c("Yes" = "With Water", "No" = "Without Water")) +
+  labs(title = "", y = "", x = "Red") +
+  theme_minimal() +
+  theme(
+  axis.title.x = element_blank(),
+  axis.text.x = element_blank(),
+  axis.text.y = element_blank(),
+  axis.ticks.x = element_blank(),
+  axis.ticks.y = element_blank(),
+  legend.position = "NA"
+)
+
+#
+print(ggplot_red_period1)
+```
+
+```{r winter boxplots}
+# Filtering data for period 1, category 'Green'
+green_data_period2 <- bocc5_counts %>%
+  filter(period == 2, bocc5 == "green") %>%
+  mutate(water = factor(water, levels = c("Yes", "No")))  # Set factor levels to control order
+
+# Create the box plot with points and lines
+ggplot_green_period2 <- ggplot(green_data_period2, aes(x = water, y = count, fill = water)) +
+  geom_boxplot(alpha = 1, outlier.shape = NA) + 
+  geom_point(aes(group = unique_pairing), size = 2, alpha = 0.3) +
+  geom_line(aes(group = unique_pairing), color = "gray40", size = 0.5, alpha = 0.7) +  
+  scale_fill_manual(values = c("Yes" = "#2A758E", "No" = "#65A73D")) + 
+  scale_x_discrete(labels = c("Yes" = "With Water", "No" = "Without Water")) +
+  labs(title = "", y = "Count", x = "Green") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, hjust = 0.5),
+    axis.title.y = element_text(size = 14, hjust = 0.5, margin = margin(r = 15)),
+    axis.text.x = element_text(size = 14, color = "black"),
+    axis.text.y = element_text(size = 14, color = "black"),
+    legend.position = "NA"
+  )
+
+#
+print(ggplot_green_period2)
+
+## Amber 
+
+# Filter data for Period 1 and Amber category
+amber_data_period2 <- bocc5_counts %>%
+  filter(period == 2, bocc5 == "amber") %>%
+  mutate(water = factor(water, levels = c("Yes", "No")))
+
+# Create the box plot with points and lines
+ggplot_amber_period2 <- ggplot(amber_data_period2, aes(x = water, y = count, fill = water)) +
+  geom_boxplot(alpha = 1, outlier.shape = NA) +
+  geom_point(aes(group = unique_pairing), size = 2, alpha = 0.3) +
+  geom_line(aes(group = unique_pairing), color = "gray40", size = 0.5, alpha = 0.7) +
+  scale_fill_manual(values = c("Yes" = "#2A758E", "No" = "#65A73D")) +
+  scale_x_discrete(labels = c("Yes" = "With Water", "No" = "Without Water")) +
+  labs(title = "", y = "", x = "Amber") +
+  theme_minimal() +
+   theme(plot.title = element_text(size = 16, hjust = 0.5), axis.text.x = element_text(size = 14), axis.text.y = element_blank(), legend.position = "NA")
+
+#
+print(ggplot_amber_period2)
+
+## Red
+
+# Filter data for Period 1 and Amber category
+red_data_period2 <- bocc5_counts %>%
+  filter(period == 2, bocc5 == "red") %>%
+  mutate(water = factor(water, levels = c("Yes", "No")))
+
+# Create the box plot with points and lines
+ggplot_red_period2 <- ggplot(red_data_period2, aes(x = water, y = count, fill = water)) +
+  geom_boxplot(alpha = 1, outlier.shape = NA) +
+  geom_point(aes(group = unique_pairing), size = 2, alpha = 0.3) +
+  geom_line(aes(group = unique_pairing), color = "gray40", size = 0.5, alpha = 0.7) +
+  scale_fill_manual(values = c("Yes" = "#2A758E", "No" = "#65A73D")) +
+  scale_x_discrete(labels = c("Yes" = "With Water", "No" = "Without Water")) +
+  labs(title = "", y = "", x = "Red") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 16, hjust = 0.5), axis.text.x = element_text(size = 14), axis.text.y = element_blank(), legend.position = "NA")
+
+#
+print(ggplot_red_period2)
+```
+
+```{r combine plots}
+# Update factor levels with descriptive labels before creating each plot
+update_water_labels <- function(data) {
+  data %>%
+    mutate(water = factor(water, levels = c("Yes", "No"), labels = c("With Water", "Without Water")))
+}
+
+# Update each plot to have a consistent y-axis scale
+ggplot_green_period1 <- ggplot_green_period1 + scale_y_continuous(limits = c(0, 22))
+ggplot_amber_period1 <- ggplot_amber_period1 + scale_y_continuous(limits = c(0, 22))
+ggplot_red_period1 <- ggplot_red_period1 + scale_y_continuous(limits = c(0, 22))
+
+ggplot_green_period2 <- ggplot_green_period2 + scale_y_continuous(limits = c(0, 22))
+ggplot_amber_period2 <- ggplot_amber_period2 + scale_y_continuous(limits = c(0, 22))
+ggplot_red_period2 <- ggplot_red_period2 + scale_y_continuous(limits = c(0, 22))
+
+# Combine the plots
+final_plot <- (ggplot_green_period1 | ggplot_amber_period1 | ggplot_red_period1) / 
+              (ggplot_green_period2 | ggplot_amber_period2 | ggplot_red_period2)
+
+# Fix y-axis spacing: remove y-axis from middle & right plots
+remove_y_axis <- theme(
+  axis.title.y = element_blank(),
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank()
+)
+
+# Fix x-axis: only show for bottom row
+remove_x_axis <- theme(
+  axis.title.x = element_blank(),
+  axis.text.x = element_blank(),
+  axis.ticks.x = element_blank()
+)
+
+# Apply fixes to period 1 (top row)
+ggplot_amber_period1 <- ggplot_amber_period1 + remove_y_axis + remove_x_axis
+ggplot_red_period1   <- ggplot_red_period1 + remove_y_axis + remove_x_axis
+ggplot_green_period1 <- ggplot_green_period1 + remove_x_axis
+
+# Apply fixes to period 2 (bottom row)
+ggplot_amber_period2 <- ggplot_amber_period2 + remove_y_axis
+ggplot_red_period2   <- ggplot_red_period2 + remove_y_axis
+# green_period2 keeps y-axis for alignment
+
+# Combine with consistent layout
+final_plot <- (
+  ggplot_green_period1 | ggplot_amber_period1 | ggplot_red_period1
+) /
+(
+  ggplot_green_period2 | ggplot_amber_period2 | ggplot_red_period2
+) +
+  plot_layout(guides = "collect", widths = c(1, 1, 1), heights = c(1, 1))  # Keep everything symmetric
+
+# Display the plot
+final_plot
+
+# Save as PNG
+ggsave("conservation_status.png",
+       plot = final_plot,
+       width = 7, height = 12,  # A4 in inches (portrait)
+       dpi = 300,
+       units = "in")
+```
+
+```{r diagnostic plots}
+ggplot(bocc5_counts, aes(x = water, y = count, fill = water)) +
+  geom_boxplot() +
+  labs(title = "Distribution of Total Counts by Water Availability",
+       x = "Water Availability", y = "Total Count") +
+  theme_minimal()
+
+ggplot(bocc5_counts, aes(x = count)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") + 
+  facet_wrap(~water, scales = "free_y") +
+  labs(title = "Histogram of Total Counts by Water Availability",
+       x = "Total Count", y = "Frequency") +
+  theme_minimal()
+
+# Function to generate diagnostic plots for each combination of bocc5, water, and period
+generate_diagnostics <- function(data, period_val) {
+  
+  # Filter data for the given period
+  data_filtered <- data %>% filter(period == period_val)
+  
+  # List of species colors (bocc5) and water conditions
+  bocc5_levels <- unique(data_filtered$bocc5)
+  water_levels <- unique(data_filtered$water)
+  
+  # Loop over each species color and water condition to generate plots
+  for (species in bocc5_levels) {
+    for (water_condition in water_levels) {
+      
+      # Filter the data based on species color and water condition
+      data_subset <- data_filtered %>%
+        filter(bocc5 == species & water == water_condition)
+      
+      # Histogram
+      p_hist <- ggplot(data_subset, aes(x = count)) +
+        geom_histogram(bins = 20, fill = "skyblue", color = "black", alpha = 0.7) +
+        labs(title = paste("Histogram of Counts for", species, "(", water_condition, "Water)"),
+             x = "Count", y = "Frequency") +
+        theme_minimal() +
+        theme(
+          axis.text = element_text(size = 12), 
+          axis.title = element_text(size = 14), 
+          plot.title = element_text(size = 16, hjust = 0.5)
+        )
+      
+      # Q-Q Plot
+      p_qq <- ggplot(data_subset, aes(sample = count)) +
+        geom_qq() +
+        geom_qq_line() +
+        labs(title = paste("Q-Q Plot of Counts for", species, "(", water_condition, "Water)"),
+             x = "Theoretical Quantiles", y = "Sample Quantiles") +
+        theme_minimal() +
+        theme(
+          axis.text = element_text(size = 12), 
+          axis.title = element_text(size = 14), 
+          plot.title = element_text(size = 16, hjust = 0.5)
+        )
+      
+      # Boxplot
+      p_box <- ggplot(data_subset, aes(x = factor(1), y = count)) +
+        geom_boxplot(fill = "lightgreen", color = "black") +
+        labs(title = paste("Boxplot of Counts for", species, "(", water_condition, "Water)"),
+             x = "", y = "Count") +
+        theme_minimal() +
+        theme(
+          axis.text = element_text(size = 12), 
+          axis.title = element_text(size = 14), 
+          plot.title = element_text(size = 16, hjust = 0.5)
+        )
+      
+      # Print the plots for this combination
+      print(p_hist)
+      print(p_qq)
+      print(p_box)
+    }
+  }
+}
+
+# Apply the function for Period 1
+generate_diagnostics(bocc5_counts, period_val = 1)
+
+# Apply the function for Period 2
+generate_diagnostics(bocc5_counts, period_val = 2)
+```
+
+Data is non-parametric. 
+
+```{r summer differences}
+# period 1 differences
+df_period1 <- bocc5_counts %>%
+  filter(period == 1) %>%
+  group_by(bocc5, pairing) %>%
+  summarise(
+    difference = diff(count),
+    .groups = "drop"
+  )
+
+# 
+ggplot(df_period1, aes(x = difference)) +
+  geom_histogram(bins = 20, fill = "blue", color = "black") +
+  facet_wrap(~bocc5, scales = "free") +
+  ggtitle("Histogram of Differences by Color") +
+  xlab("Difference in Counts") + ylab("Frequency") +
+  theme_minimal()
+
+# Q-Q Plots for each color
+df_period1 %>%
+  split(.$bocc5) %>%
+  lapply(function(data) {
+    qqnorm(data$difference, main = paste("Q-Q Plot for", unique(data$bocc5)))
+    qqline(data$difference, col = "red")
+  })
+```
+
+Data is sufficient for wilcoxon with relatively symmetrical differences.
+
+```{r winter differences}
+# period 1 differences
+df_period2<- bocc5_counts %>%
+  filter(period == 2) %>%
+  group_by(bocc5, pairing) %>%
+  summarise(
+    difference = diff(count),
+    .groups = "drop"
+  )
+
+# 
+ggplot(df_period2, aes(x = difference)) +
+  geom_histogram(bins = 20, fill = "blue", color = "black") +
+  facet_wrap(~bocc5, scales = "free") +
+  ggtitle("Histogram of Differences by Color") +
+  xlab("Difference in Counts") + ylab("Frequency") +
+  theme_minimal()
+
+# Q-Q Plots for each color
+df_period2 %>%
+  split(.$bocc5) %>%
+  lapply(function(data) {
+    qqnorm(data$difference, main = paste("Q-Q Plot for", unique(data$bocc5)))
+    qqline(data$difference, col = "red")
+  })
+```
+
+Data is sufficient for wilcoxon with relatively symmetrical differences 
+(green is skewed).
+
+```{r arrange data for wilcox}
+#
+bocc5_pivoted <- bocc5_counts %>%
+  group_by(pairing, period, bocc5, water) %>%
+  summarise(total_count = sum(count, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = water, values_from = total_count, values_fill = list(total_count = 0)) %>%
+  pivot_wider(names_from = bocc5, values_from = c(Yes, No), values_fill = list(Yes = 0, No = 0))  
+
+#
+View(bocc5_pivoted)
+
+# Separate datasets for each period
+bocc5_period1 <- bocc5_pivoted %>% filter(period == 1)
+bocc5_period2 <- bocc5_pivoted %>% filter(period == 2)
+```
+
+```{r wilcox summer}
+wilcox_green_p1 <- wilcox.test(bocc5_period1$Yes_green, bocc5_period1$No_green, paired = TRUE, exact = FALSE)
+print(wilcox_green_p1)
+
+wilcox_amber_p1 <- wilcox.test(bocc5_period1$Yes_amber, bocc5_period1$No_amber, paired = TRUE, exact = FALSE)
+print(wilcox_amber_p1)
+
+wilcox_red_p1 <- wilcox.test(bocc5_period1$Yes_red, bocc5_period1$No_red, paired = TRUE, exact = FALSE)
+print(wilcox_red_p1) 
+```
+
+```{r wilcox winter}
+wilcox_green_p2 <- wilcox.test(bocc5_period2$Yes_green, bocc5_period2$No_green, paired = TRUE, exact = FALSE)
+print(wilcox_green_p2)
+
+wilcox_amber_p2 <- wilcox.test(bocc5_period2$Yes_amber, bocc5_period2$No_amber, paired = TRUE, exact = FALSE)
+print(wilcox_amber_p2)
+
+wilcox_red_p2 <- wilcox.test(bocc5_period2$Yes_red, bocc5_period2$No_red, paired = TRUE, exact = FALSE)
+print(wilcox_red_p2)
+```
+
+```{r species table}
+species_table <- boc_grouped %>%
+  mutate(present = 1) %>%
+  group_by(period, water, bocc5, species) %>%
+  summarise(present = max(present), .groups = "drop") %>%
+  pivot_wider(names_from = c(period, water), values_from = present, values_fill = 0)
+
+#
+species_table
+```
+
+
