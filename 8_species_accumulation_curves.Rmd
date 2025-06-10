@@ -1,0 +1,340 @@
+---
+title: "Species Accumulation Curves"
+author: "Matthew Morgan"
+date: "2025-04-16"
+output: html_document
+---
+
+```{r load packages}
+library(dplyr)
+library(iNEXT)
+library(patchwork)
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(grid) 
+```
+
+```{r import original data}
+bird <- read_csv("Master_DB_Birds.csv", 
+                 show_col_types = FALSE)
+species <- unique(bird$species)
+#view(species)
+sum(bird$count)
+```
+
+```{r group data}
+#
+  bird_data_grouped <- bird %>%
+  group_by(transect, period, water, species) %>%
+  summarise(count = sum(count, na.rm = TRUE)) %>%
+  ungroup()
+
+# 
+head(bird_data_grouped)
+sum(bird_data_grouped$count)
+```
+```{r reshape data}
+diversity_data <- bird_data_grouped %>%
+  pivot_wider(names_from = species, values_from = count, values_fill = 0)
+
+#
+head(diversity_data)
+```
+
+```{r prepare summer season}
+# Pool periods 1, 3, and 4 into period 1
+diversity_data <- diversity_data %>%
+  mutate(period = ifelse(period %in% c(1, 3, 4), 1, period))
+
+# Assign unique transect numbers
+diversity_data <- diversity_data %>%
+  arrange(period, transect) %>% 
+  group_by(period) %>%
+  mutate(transect = case_when(
+    period == 1 ~ row_number(),           
+    TRUE ~ transect                            
+  )) %>%
+  ungroup()
+
+# 
+print(diversity_data)
+
+```
+
+```{r setup dataframes}
+species_columns <- 4:82
+
+summer_spec <- diversity_data %>%
+  filter(period == 1)
+
+winter_spec <- diversity_data %>%
+  filter((period ==2))
+```
+
+```{r summer sac}
+# columns
+species_cols <- 4:82
+
+# Filter
+summer_yes <- summer_spec[summer_spec$water == "Yes", species_cols]
+summer_no <- summer_spec[summer_spec$water == "No", species_cols]
+
+#  Identify species present in at least one condition (remove winter species)
+species_present_yes <- (colSums(summer_yes, na.rm = TRUE) > 0)
+species_present_no <- (colSums(summer_no, na.rm = TRUE) > 0)
+
+# Keep only the species present in at least one condition
+summer_yes_filtered <- summer_yes[, species_present_yes, drop = FALSE]
+summer_no_filtered <- summer_no[, species_present_no, drop = FALSE]
+
+# Convert data to lists of abundance for each group (summing over all sampling units)
+abundance_yes <- colSums(summer_yes_filtered, na.rm = TRUE)
+abundance_no <- colSums(summer_no_filtered, na.rm = TRUE)
+
+# Create a list for iNEXT with the filtered abundance data
+species_data <- list(
+  "Water_Yes" = abundance_yes,
+  "Water_No" = abundance_no
+)
+
+# Species accumulation and diversity estimation
+result <- iNEXT(species_data, q = 0, datatype = "abundance", endpoint = 12000, se = TRUE, conf = 0.95, nboot = 100)
+
+# View the results
+summary(result)
+
+# Plot species accumulation curves
+ggiNEXT(result, type = 1)  # Type 1 for sample-size-based rarefaction/extrapolation
+
+
+```
+
+```{r summer sac abundance}
+
+# Plot Species Richness (q = 0)
+p1 <- ggiNEXT(result, type = 1) + 
+  coord_cartesian(ylim = c(0, 80))+
+  labs(title = "Summer", y = "Species richness", x = "Number of individuals") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, hjust = 0.5, margin = margin(b = 15)),    # Center the title     
+    axis.title.x = element_text(size = 14, margin = margin(t = 15)),               # X-axis title with top margin
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),               # Y-axis title with right margin
+    axis.text.x = element_text(size = 12, margin = margin(t = 10)),                # X-axis text with top margin
+    axis.text.y = element_text(size = 12, margin = margin(r = 10)),                # Y-axis text with right margin
+    legend.position = "none",                                                      # Hide the legend
+    plot.margin = unit(c(1, 1, 1, 1), "cm")                                        # Plot margins: Top, Right, Bottom, Left
+  ) +
+  scale_color_manual(
+    values = c("Water_No" = "#65A73D", "Water_Yes" = "#2A758E"),                    # Set line colors
+    labels = c("Water No", "Water Yes")                                            # Update legend labels
+  ) +
+  scale_fill_manual(
+    values = c("Water_No" = "#65A73D", "Water_Yes" = "#2A758E")                     # Set fill colors to match line colors
+  ) +
+  scale_x_continuous(breaks = seq(0, 15000, by = 2000))
+
+p1
+
+```
+
+```{r summer sac effort (transects)}
+# 
+species_cols <- 4:82
+summer_yes <- summer_spec[summer_spec$water == "Yes", species_cols]
+summer_no <- summer_spec[summer_spec$water == "No", species_cols]
+
+# Convert to presence-absence format (1 for presence, 0 for absence)
+presence_absence_yes <- ifelse(summer_yes > 0, 1, 0)
+presence_absence_no <- ifelse(summer_no > 0, 1, 0)
+
+# Transpose the presence-absence matrices so that species are in rows
+presence_absence_yes_t <- t(presence_absence_yes)
+presence_absence_no_t <- t(presence_absence_no)
+
+# Remove species (rows) with all zeros in both datasets after transposition
+presence_absence_yes_filtered <- presence_absence_yes_t[rowSums(presence_absence_yes_t) > 0, ]
+presence_absence_no_filtered <- presence_absence_no_t[rowSums(presence_absence_no_t) > 0, ]
+
+# Assign row names (species) and column names (transects)
+rownames(presence_absence_yes_filtered) <- paste("Species", 1:nrow(presence_absence_yes_filtered), sep = "_")
+colnames(presence_absence_yes_filtered) <- paste("Transect", 1:ncol(presence_absence_yes_filtered), sep = "_")
+
+rownames(presence_absence_no_filtered) <- paste("Species", 1:nrow(presence_absence_no_filtered), sep = "_")
+colnames(presence_absence_no_filtered) <- paste("Transect", 1:ncol(presence_absence_no_filtered), sep = "_")
+
+# Create a list for iNEXT
+species_data_incidence <- list(
+  "Water_Yes" = presence_absence_yes_filtered,
+  "Water_No" = presence_absence_no_filtered
+)
+
+# Run iNEXT with the filtered data
+result_incidence <- iNEXT(species_data_incidence, q = 0, datatype = "incidence_raw", endpoint = 66, se = TRUE, conf = 0.95, nboot = 100)
+
+# Plot species accumulation curves with restricted x-axis
+p2 <- ggiNEXT(result_incidence, type = 1) +
+  coord_cartesian(xlim = c(0, 66), ylim = c(0, 80)) + # 66 = double actual effort
+  labs(title = "", y = "Species richness", x = "Transects") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, hjust = 0.5, margin = margin(b = 15)),    
+    axis.title.x = element_text(size = 14, margin = margin(t = 15)),               
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),               
+    axis.text.x = element_text(size = 12, margin = margin(t = 10)),                
+    axis.text.y = element_text(size = 12, margin = margin(r = 10)),                
+    legend.position = "none",                                                      
+    plot.margin = unit(c(1, 1, 1, 1), "cm")                                       
+  ) +
+  scale_color_manual(
+    values = c("Water_No" = "#65A73D", "Water_Yes" = "#2A758E"),                    
+    labels = c("Water No", "Water Yes")                                            
+  ) +
+  scale_fill_manual(
+    values = c("Water_No" = "#65A73D", "Water_Yes" = "#2A758E")                      
+  )
+p2
+```
+
+```{r winter sac abundance}
+# 
+species_cols <- 4:82
+
+# Filter the dataset by 'Yes' and 'No' for water
+winter_yes <- winter_spec[winter_spec$water == "Yes", species_cols]
+winter_no <- winter_spec[winter_spec$water == "No", species_cols]
+
+# Identify species present in at least one condition for each set independently
+species_present_yes <- (colSums(winter_yes, na.rm = TRUE) > 0)
+species_present_no <- (colSums(winter_no, na.rm = TRUE) > 0)
+
+# Keep only the species present in at least one condition 
+winter_yes_filtered <- winter_yes[, species_present_yes, drop = FALSE]
+winter_no_filtered <- winter_no[, species_present_no, drop = FALSE]
+
+# Convert data to lists of abundance for each group (summing over all sampling units)
+abundance_yes <- colSums(winter_yes_filtered, na.rm = TRUE)
+abundance_no <- colSums(winter_no_filtered, na.rm = TRUE)
+
+# Create a list for iNEXT with the filtered abundance data
+species_data <- list(
+  "Water_Yes" = abundance_yes,
+  "Water_No" = abundance_no
+)
+
+# Run iNEXT for species accumulation and diversity estimation
+result_w <- iNEXT(species_data, q = 0, datatype = "abundance", endpoint = 6000, se = TRUE, conf = 0.95, nboot = 100)
+
+# View the results
+summary(result_w)
+
+# Plot species accumulation curves
+ggiNEXT(result_w, type = 1)  # Type 1 for sample-size-based rarefaction/extrapolation
+
+# Plot Species Richness (q = 0)
+ # for unit() function
+
+# Modified plot with updated legend labels
+p3 <- ggiNEXT(result_w, type = 1) + 
+  coord_cartesian(ylim = c(0, 80)) +  
+  labs(title = "Winter", y = "", x = "Number of individuals") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, hjust = 0.5, margin = margin(b = 15)),     
+    axis.title.x = element_text(size = 14, margin = margin(t = 15)),               
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),               
+    axis.text.x = element_text(size = 12, margin = margin(t = 10)),                
+    axis.text.y = element_text(size = 12, margin = margin(r = 10)),                
+    legend.position = "none",                                                     
+    plot.margin = unit(c(1, 1, 1, 1), "cm")                                         
+  ) +
+  scale_color_manual(
+    values = c("Water_No" = "#65A73D", "Water_Yes" = "#2A758E"),                    
+    labels = c("Water No", "Water Yes")                                            
+  ) +
+  scale_fill_manual(
+    values = c("Water_No" = "#65A73D", "Water_Yes" = "#2A758E")                     
+  )
+p3
+```
+
+```{r winter sac effort (transects)}
+# Extract the relevant species columns
+species_cols <- 4:82
+winter_yes <- winter_spec[winter_spec$water == "Yes", species_cols]
+winter_no <- winter_spec[winter_spec$water == "No", species_cols]
+
+# Convert to presence-absence format (1 for presence, 0 for absence)
+presence_absence_yes <- ifelse(winter_yes > 0, 1, 0)
+presence_absence_no <- ifelse(winter_no > 0, 1, 0)
+
+# Transpose the presence-absence matrices so that species are in rows
+presence_absence_yes_t <- t(presence_absence_yes)
+presence_absence_no_t <- t(presence_absence_no)
+
+# Remove species (rows) with all zeros in both datasets after transposition
+presence_absence_yes_filtered <- presence_absence_yes_t[rowSums(presence_absence_yes_t) > 0, ]
+presence_absence_no_filtered <- presence_absence_no_t[rowSums(presence_absence_no_t) > 0, ]
+
+# Assign row names (species) and column names (transects)
+rownames(presence_absence_yes_filtered) <- paste("Species", 1:nrow(presence_absence_yes_filtered), sep = "_")
+colnames(presence_absence_yes_filtered) <- paste("Transect", 1:ncol(presence_absence_yes_filtered), sep = "_")
+
+rownames(presence_absence_no_filtered) <- paste("Species", 1:nrow(presence_absence_no_filtered), sep = "_")
+colnames(presence_absence_no_filtered) <- paste("Transect", 1:ncol(presence_absence_no_filtered), sep = "_")
+
+# Create a list for iNEXT
+species_data_incidence <- list(
+  "Water_Yes" = presence_absence_yes_filtered,
+  "Water_No" = presence_absence_no_filtered
+)
+
+# Run iNEXT with the filtered data
+result_incidence_w <- iNEXT(species_data_incidence, q = 0, datatype = "incidence_raw", endpoint = 22, se = TRUE, conf = 0.95, nboot = 100)
+
+# Plot species accumulation curves with restricted x-axis (up to 15 sampling units)
+p4 <- ggiNEXT(result_incidence_w, type = 1) +
+  coord_cartesian(xlim = c(0, 22), ylim = c(0, 80))+  
+  labs(y = "", x = "Transects") +
+  theme_minimal() + 
+  theme(
+    plot.title = element_text(size = 16, hjust = 0.5, margin = margin(b = 15)),    
+    axis.title.x = element_text(size = 14, margin = margin(t = 15)),               
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),               
+    axis.text.x = element_text(size = 12, margin = margin(t = 10)),                
+    axis.text.y = element_text(size = 12, margin = margin(r = 10)),                
+    legend.position = "",                                                     
+    plot.margin = unit(c(1, 1, 1, 1), "cm")                                        
+  ) +
+  scale_color_manual(
+    values = c("Water_No" = "#65A73D", "Water_Yes" = "#2A758E"),                    
+    labels = c("Water No", "Water Yes")                                            
+  ) +
+  scale_fill_manual(
+    values = c("Water_No" = "#65A73D", "Water_Yes" = "#2A758E")                      
+  )
+p4
+```
+
+```{r final plots}
+p1 <- p1 + theme(plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"))
+p2 <- p2 + theme(plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"))
+p3 <- p3 + theme(plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"))
+p4 <- p4 + theme(plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"))
+# Arrange the plots in a 2x2 grid using patchwork
+combined_plot <- (p1 | p3) / (p2 | p4)
+
+# Display the combined plot
+combined_plot
+
+#save plot
+ggsave(
+  filename = "sac_birds.png",        
+  plot = combined_plot,                  
+  width = 9,                          
+  height = 12,                        
+  dpi = 300                            
+)
+```
+
