@@ -1,0 +1,411 @@
+---
+title: "LULC_Transect_Analysis"
+author: "Matthew Morgan"
+date: "2024-11-07"
+output: html_document
+---
+
+```{r laod packages}
+library(readr)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(car)
+library(MASS)       
+library(boot)
+library(lme4)
+library(purrr)
+library(patchwork)
+```
+
+```{r import data}
+comp <- read_csv("class_tran_v1.csv", show_col_types = FALSE)
+
+tran_area <- read_csv("all_transect_buffer.csv", show_col_types = FALSE)
+
+esa_canopy <- read_csv("esa_canopy_transects.csv")
+
+species <- read_csv("subset_data.csv")
+```
+Transpose data into wide format using the priFun attribute
+```{r wide format}
+# 
+comp_wide <- comp %>%
+  pivot_wider(names_from = priFunc, values_from = area)
+
+# Merge pivoted comp_wide with esa_canopy and tran_area by 'id'
+merged_data <- comp_wide %>%
+  inner_join(esa_canopy, by = "id") %>%
+  inner_join(tran_area, by = "id")
+
+#
+print(merged_data)
+```
+
+```{r calculate unique sum for each transect}
+# Rename area
+merged_data <- merged_data %>%
+  rename(transect_area = area)
+
+# Check structure
+str(merged_data)
+
+# Define columns to sum for 'LULC_sum'
+sum_cols <- 2:16
+
+# Create column 'LULC_sum' (sum of columns 2 to 16)
+merged_data <- merged_data %>%
+  mutate(LULC_sum = rowSums(across(all_of(sum_cols)), na.rm = TRUE))
+
+#
+print(merged_data)
+
+# Percentage
+merged_data <- merged_data %>%
+  mutate(
+    build_per = (building / transect_area) * 100,
+    road_per = (road / transect_area) * 100,
+    grass_per = (grass / transect_area) * 100,
+    salt_per = (saltmarsh / transect_area) * 100,
+    imper_per = (impervious / transect_area) * 100,
+    garden_per = (garden / transect_area) * 100,
+    tidal_per = (tidal / transect_area) * 100,
+    foreshore_per = (foreshore / transect_area) * 100,
+    water_per = (water / transect_area) * 100,
+    reeds_per = (reeds / transect_area) * 100,
+    rough_per = (rough / transect_area) * 100,
+    tree_per = (tree / transect_area) * 100,
+    crop_per = (crop / transect_area) * 100,
+    riparian_per = (riparian / transect_area) * 100,
+    allotment_per = (allotment / transect_area) * 100,
+    esa_canopy_per = (esa_canopy / transect_area) * 100
+  )
+
+#
+print(merged_data)
+```
+
+```{r add pairs}
+merged_data <- merged_data %>%
+  mutate(transect_pair = case_when(
+    id == 1  ~ 1,
+    id == 2  ~ 1,
+    id == 3  ~ 2,
+    id == 4  ~ 2,
+    id == 5  ~ 3,
+    id == 6  ~ 3,
+    id == 7  ~ 4,
+    id == 8  ~ 4,
+    id == 9  ~ 5,
+    id == 10 ~ 5,
+    id == 11 ~ 6,
+    id == 12 ~ 6,
+    id == 13 ~ 7,
+    id == 14 ~ 7,
+    id == 15 ~ 8,
+    id == 16 ~ 8,
+    id == 17 ~ 9,
+    id == 18 ~ 9,
+    id == 19 ~ 10,
+    id == 20 ~ 10,
+    id == 21 ~ 11,
+    id == 22 ~ 11
+  ))
+```
+
+```{r add presence of absence of blue space}
+merged_data <- merged_data %>%
+  mutate(h20 = case_when(
+    id %in% c(1, 3, 6, 8, 10, 12, 13, 15, 17, 20, 22) ~ "Yes",
+    TRUE ~ "No"
+  ))
+```
+
+```{r split transects and respective land cover}
+df <- merged_data
+
+# Splitting the data into "Water" and "No Water"
+water_data <- df %>%
+  filter(h20 == "Yes") %>%
+  group_by(transect_pair) %>%
+  summarise(across(c(build_per, road_per, grass_per, salt_per, imper_per, garden_per, tidal_per, foreshore_per, water_per, reeds_per, tree_per, rough_per, crop_per, riparian_per, allotment_per, esa_canopy_per),
+                   ~ mean(., na.rm = TRUE), .names = "water_{.col}"))
+
+no_water_data <- df %>%
+  filter(h20 == "No") %>%
+  group_by(transect_pair) %>%
+  summarise(across(c(build_per, road_per, grass_per, salt_per, imper_per, garden_per, tidal_per, foreshore_per, water_per, reeds_per, tree_per, rough_per, crop_per, riparian_per, allotment_per, esa_canopy_per),
+                   ~ mean(., na.rm = TRUE), .names = "nowater_{.col}"))
+
+# Joining on transect_pair
+combined_data <- water_data %>%
+  left_join(no_water_data, by = "transect_pair", "id")
+
+combined_data  <- combined_data  %>%
+  mutate(across(everything(), ~replace(., is.na(.), 0)))
+
+#
+print(combined_data)
+```
+
+```{r landcover boxplots}
+df_long <- combined_data %>%
+  pivot_longer(
+    cols = -transect_pair,
+    names_to = c("condition", "cover_type"),
+    names_pattern = "^(water|nowater)_(.*)",  # Match columns with 'water' or 'nowater' prefix
+    values_to = "value"
+  ) %>%
+  mutate(
+    condition = ifelse(condition == "water", "Yes", "No")  # Rename to Yes/No for clarity
+  )
+
+# Check the reshaped data
+print(head(df_long))
+
+# check which covers are present
+df_freq <- df_long %>%
+  filter(!is.na(value) & value != 0) %>%  # Filter out NA or zero values
+  group_by(cover_type, condition) %>%
+  summarise(count = n(), .groups = 'drop')
+
+# Check unique values in condition and cover_type to confirm splitting
+print(unique(df_long$condition))
+print(unique(df_long$cover_type))
+
+# Plotting
+ggplot(df_long, aes(x = cover_type, y = value, fill = condition)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("Yes" = "blue", "No" = "red")) +
+  labs(
+    title = "Comparison of Land Cover: Water vs No Water",
+    x = "Cover Type",
+    y = "Cover Value"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))  # Rotate x-axis labels for readability
+
+```
+
+```{r average landcover}
+# Calculate the average
+df_avg <- df_long %>%
+  group_by(cover_type, condition) %>%
+  summarise(avg_value = mean(value, na.rm = TRUE), .groups = 'drop')
+
+# Plot
+ggplot(df_avg, aes(x = cover_type, y = avg_value, fill = condition)) +
+  geom_col(position = "dodge") +  # Dodge position for side-by-side bars
+  scale_fill_manual(values = c("Yes" = "blue", "No" = "red")) +
+  labs(
+    title = "Average Land Cover Comparison: Water vs No Water",
+    x = "Cover Type",
+    y = "Average Cover Value"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))  # Rotate x-axis labels for readability
+```
+
+```{r merge small landcover groups}
+# Assuming df_long is your dataframe in long format
+df_long <- df_long %>%
+  pivot_wider(names_from = cover_type, values_from = value)
+  
+  # 
+df_long <- df_long %>%
+  mutate(
+    blue = rowSums(across(c(water_per, reeds_per, salt_per, foreshore_per, riparian_per, tidal_per)), na.rm = TRUE),
+    garden_other = rowSums(across(c(garden_per, allotment_per, crop_per)), na.rm = TRUE),
+    grass = rowSums(across(c(grass_per, rough_per)), na.rm = TRUE)
+  )
+
+  # 
+df_long <- df_long %>%
+  dplyr::select(-any_of(c("water_per", "reeds_per", "salt_per", "foreshore_per", "riparian_per", 
+                          "garden_per", "allotment_per", "crop_per", "grass_per", 
+                          "rough_per", "esa_canopy_per", "tidal_per")))
+
+# 
+ df_long <- df_long %>%
+   pivot_longer(cols = c(blue, garden_other, grass, build_per, road_per, imper_per, tree_per), 
+               names_to = "cover_type", 
+               values_to = "value")
+```
+
+```{r boxplot landcover groups}
+p1 <- ggplot(df_long, aes(x = cover_type, y = value, fill = condition)) +
+  geom_boxplot() +
+  geom_point(position = position_dodge(width = 0.75), alpha = 0.5, size = 1.5) + 
+  scale_fill_manual(values = c("Yes" = "#2A758E", "No" = "#65A73D")) +
+  scale_x_discrete(
+    labels = c(
+      "blue" = "Blue Space",
+      "build_per" = "Buildings",
+      "garden_other" = "Gardens",
+      "grass" = "Grass",
+      "imper_per" = "Impervious\nSurfaces",
+      "road_per" = "Roads",
+      "tree_per" = "Trees")
+    ) +
+  labs(
+    title = "",
+    x = "",
+    y = "Average Cover Value"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, size = 10),  
+    axis.text.y = element_text(size = 10),  
+    axis.title.x = element_text(size = 12, margin = margin(t = 10)),  
+    axis.title.y = element_text(size = 12, margin = margin(r = 10)),  
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),  
+    legend.title = element_text(size = 12),  
+    legend.text = element_text(size = 10)  
+  )
+p1
+```
+
+```{r diagnostics before anova/kruskall wallis}
+# Shapiro-Wilk tests
+normality_results <- df_long %>%
+  group_by(cover_type, condition) %>%
+  summarize(
+    shapiro_p = shapiro.test(value)$p.value,  # p-value from Shapiro test
+    .groups = "drop"
+  )
+
+print(normality_results)
+
+# QQ plots for each group
+ggplot(df_long, aes(sample = value)) +
+  stat_qq() +
+  stat_qq_line() +
+  facet_grid(cover_type ~ condition) +
+  theme_bw() +
+  labs(
+    title = "QQ Plots by Cover Type and Condition",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles"
+  )
+
+```
+
+```{r run kruskall}
+df_long %>%
+  group_by(cover_type) %>%
+  summarise(p_value = kruskal.test(value ~ condition, data = cur_data())$p.value)
+
+df_long$group <- interaction(df_long$cover_type, df_long$condition)
+kruskal.test(value ~ group, data = df_long)
+```
+
+```{r format wide}
+df_wide <- df_long %>%
+  dplyr::select(transect_pair, cover_type, condition, value) %>%  # Explicitly call dplyr's select()
+  pivot_wider(names_from = condition, values_from = value) 
+print(df_wide)
+```
+
+```{r wilcoxon}
+df_wide <- df_long %>%
+  dplyr::select(transect_pair, cover_type, condition, value) %>%  
+  pivot_wider(names_from = condition, values_from = value)  
+
+# run paired wilcoxon
+wilcoxon_paired_results <- df_wide %>%
+  group_by(cover_type) %>%
+  summarise(
+    test = list(wilcox.test(Yes, No, paired = TRUE, correct = TRUE)),  
+    W = map_dbl(test, ~ .x$statistic),  
+    p_value = map_dbl(test, ~ .x$p.value),  
+    N = n(),  
+    Z = qnorm(p_value / 2) * sign(W - (N * (N + 1) / 4)),  
+    r = abs(Z / sqrt(N))  
+  ) %>%
+  ungroup() 
+
+print(wilcoxon_paired_results)
+
+# add sig.
+wilcoxon_paired_results <- wilcoxon_paired_results %>%
+  mutate(
+    significance = case_when(
+      p_value <= 0.001 ~ "***",   # Highly significant
+      p_value <= 0.01 ~ "**",     # Moderately significant
+      p_value <= 0.05 ~ "*",      # Weakly significant
+      TRUE ~ "ns"                 # Not significant
+    )
+  )
+
+print(wilcoxon_paired_results)
+write.csv(wilcoxon_paired_results %>% select(-test), "wilcoxon_results.csv", row.names = FALSE)
+
+
+```
+
+```{r descriptive stats}
+# Compute summary statistics in a wide format
+descriptive_stats_wide <- df_long %>%
+  group_by(transect_pair, cover_type, condition) %>%
+  summarise(
+    mean = mean(value, na.rm = TRUE),
+    median = median(value, na.rm = TRUE),
+    min = min(value, na.rm = TRUE),
+    max = max(value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = condition, values_from = c(mean, median, min, max)) %>%
+  mutate(
+    mean_diff = mean_Yes - mean_No,  # Difference in means
+    median_diff = median_Yes - median_No  # Difference in medians
+  ) %>%
+  ungroup()
+
+print(descriptive_stats_wide)
+write.csv(descriptive_stats_wide, "Birds_LULC_Descriptive.csv", row.names = FALSE)
+```
+
+```{r heat map stats}
+p2 <- ggplot(descriptive_stats_wide, aes(x = cover_type, y = factor(transect_pair), fill = median_diff)) +
+  geom_tile() +  
+  scale_fill_gradient2(low = "#65A73D", mid = "#FFFFFF", high = "#2A758E", midpoint = 0) +  # Custom color scale
+  scale_x_discrete(
+    labels = c(
+      "blue" = "Blue Space",
+      "build_per" = "Buildings",
+      "garden_other" = "Gardens",
+      "grass" = "Grass",
+      "imper_per" = "Impervious\nSurfaces",  # Splitting label into two lines
+      "road_per" = "Roads",
+      "tree_per" = "Trees"
+    )
+  ) +
+  labs(
+    title = "",
+    x = "Cover Type",
+    y = "Transect Pair",
+    fill = ""
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),  
+    axis.text.y = element_text(size = 12),  
+    axis.title.x = element_text(size = 12),  
+    axis.title.y = element_text(size = 12),  
+    plot.title = element_text(size = 16, hjust = 0.5),  
+    legend.text = element_text(size = 12),  #
+    legend.title = element_text(size = 14, face = "bold") 
+  )
+p2
+```
+
+```{r combine plots}
+p1 / p2 + 
+  plot_layout(heights = c(3, 2))  
+
+ggsave("Bird_LULC.png", 
+       plot = p1 / p2 + plot_layout(heights = c(3, 2)),  
+       width = 8.3, height = 11.7, dpi = 300, units = "in")  # A4 portrait size
+```
+
