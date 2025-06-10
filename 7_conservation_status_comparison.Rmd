@@ -25,7 +25,7 @@ library(patchwork)
 ```
 
 ```{r load data}
-data <- read_csv("~/Documents/Bird_Analysis_2024/R_bird_data/merged_data.csv", 
+data <- read_csv("merged_data.csv", 
                 show_col_types = FALSE)
 ```
 
@@ -50,6 +50,7 @@ sort(unique(data$transect))
 sum(boc_grouped$count)
 sort(unique(boc_grouped$transect))
 sum(boc_grouped$count)
+unique(boc_grouped$species)
 ```
 
 ```{r aggreggate by status}
