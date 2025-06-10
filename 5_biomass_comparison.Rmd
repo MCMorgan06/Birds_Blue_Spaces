@@ -1,0 +1,483 @@
+---
+title: "Bird_Biomass"
+author: "Matthew Morgan"
+date: "2024-11-05"
+output: html_document
+---
+
+This code compares the biomass from summer and winter with the option of
+removing birds in flight.
+
+This analysis is split into two sets, one with all trophic niches included and one
+with aquatic nices excluded to test the differences of non-aquatic species.
+(6_biomass_comparison_nowetland)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(car)
+```
+
+```{r import data from directory}
+bird <- read_csv("Master_DB_Birds.csv", 
+                show_col_types = FALSE)
+sum(bird$count) # 14708
+
+detect <- read_csv("detectability_category.csv", 
+                 show_col_types = FALSE)
+
+species_size <- read_csv("tran.birdlist.alldetails.csv")
+```
+
+```{r merge summer seasons}
+bird <- bird %>%
+mutate(period = case_when(
+ period %in% c(1, 3, 4) ~ 1,
+ TRUE ~ period  # Keeps other values unchanged
+  ))
+```
+
+```{r summarise summer seasons}
+bird <- bird %>%
+  group_by(transect, period, water, species) %>%
+  summarise(total_count = sum(count, na.rm = TRUE), .groups = 'drop')
+
+# divide period 1 by 3 (three replicated carried out over the summer months)
+
+# Applying conditional logic to modify counts for Period 1 only
+bird <- bird %>%
+  mutate(count = if_else(period == 1, total_count / 3, total_count))
+head(bird)
+```
+optional (not done in final analysis due to Hirundines and other aerial species)
+```{r remove birds in flight}
+# bird <- bird %>%
+ # filter(distance_code != 4)
+```
+
+```{r merge data}
+# Merging bird and detect based on the "transect and transect_section
+
+bird <- bird %>% rename(common_name = species)
+
+merged_data <- merge(bird, species_size, by = c("common_name"))
+
+# View the merged data
+head(merged_data)
+unique(merged_data$common_name) # 79
+sum(bird$count) # 7723
+sum(merged_data$count) # 7723
+```
+
+```{r create biomass}
+# add biomass
+merged_data <- merged_data %>%
+  mutate(biomass = Mass * count)
+```
+
+```{r total bird counts across water/no water}
+total_count <- sum(merged_data$count, na.rm = TRUE)
+total_count
+y_total_count <- sum(merged_data$count[merged_data$water == "Yes"], na.rm = TRUE)
+y_total_count
+n_total_count <- sum(merged_data$count[merged_data$water == "No"], na.rm = TRUE)
+n_total_count
+```
+
+```{r biomass sum}
+# Summarise biomass by summing it for each group
+transect_biomass_summary <- merged_data %>%
+  group_by(transect, period, water) %>%
+  summarize(total_biomass = sum(biomass, na.rm = TRUE))
+```
+
+```{r summer biomass descriptives}
+# summer transects with water
+summer_w_total_biomass <- transect_biomass_summary %>%
+  filter(water == "Yes", period == "1")
+print(summer_w_total_biomass)
+summer_w_overall_average <- mean(summer_w_total_biomass$total_biomass, na.rm = TRUE)
+print(summer_w_overall_average) #218
+
+sw_range_vals <- range(summer_w_total_biomass$total_biomass)
+sw_variance_val <- var(summer_w_total_biomass$total_biomass)
+sw_sd <- sd(summer_w_total_biomass$total_biomass)
+sw_range_vals # 17 - 1177 kg
+sw_variance_val
+sw_sd # 382.6151 kg
+
+# summer transects with no water
+summer_n_total_biomass <- transect_biomass_summary %>%
+  filter(water == "No", period == "1")
+summer_n_overall_average <- mean(summer_n_total_biomass$total_biomass, na.rm = TRUE)
+print(summer_n_overall_average) # 43.6
+
+sn_range_vals <- range(summer_n_total_biomass$total_biomass)
+sn_variance_val <- var(summer_n_total_biomass$total_biomass)
+sn_sd <- sd(summer_n_total_biomass$total_biomass)
+sn_range_vals # 8.29 - 40 kg
+sn_variance_val
+sn_sd # 9.192 kg
+```
+
+```{r winter biomass descriptives}
+# winter transects with water
+winter_w_total_biomass <- transect_biomass_summary %>%
+  filter(water == "Yes", period == "2")
+print(winter_w_total_biomass)
+
+winter_w_overall_average <- mean(winter_w_total_biomass$total_biomass, na.rm = TRUE)
+print(winter_w_overall_average) # 191 kg
+
+ww_range_vals <- range(winter_w_total_biomass$total_biomass)
+ww_variance_val <- var(winter_w_total_biomass$total_biomass)
+ww_sd <- sd(winter_w_total_biomass$total_biomass)
+ww_range_vals # 23.26 - 511 kg
+ww_variance_val
+ww_sd # 187 kg
+
+# winter transects with no water
+winter_n_total_biomass <- transect_biomass_summary %>%
+  filter(water == "No", period == "2")
+
+winter_n_overall_average <- mean(winter_n_total_biomass$total_biomass, na.rm = TRUE)
+print(winter_n_overall_average) # 57.8
+
+wn_range_vals <- range(winter_n_total_biomass$total_biomass)
+wn_variance_val <- var(winter_n_total_biomass$total_biomass)
+wn_sd <- sd(winter_n_total_biomass$total_biomass)
+wn_range_vals # 28.93 - 161 kg
+wn_variance_val
+wn_sd # 36.45 kg
+```
+
+```{r add pair column}
+transect_biomass_summary <- transect_biomass_summary %>%
+  mutate(transect_pair = case_when(
+    transect == 1  ~ 1,
+    transect == 2  ~ 1,
+    transect == 3  ~ 2,
+    transect == 4  ~ 2,
+    transect == 5  ~ 3,
+    transect == 6  ~ 3,
+    transect == 7  ~ 4,
+    transect == 8  ~ 4,
+    transect == 9  ~ 5,
+    transect == 10 ~ 5,
+    transect == 11 ~ 6,
+    transect == 12 ~ 6,
+    transect == 13 ~ 7,
+    transect == 14 ~ 7,
+    transect == 15 ~ 8,
+    transect == 16 ~ 8,
+    transect == 17 ~ 9,
+    transect == 18 ~ 9,
+    transect == 19 ~ 10,
+    transect == 20 ~ 10,
+    transect == 21 ~ 11,
+    transect == 22 ~ 11
+  ))
+```
+
+```{r transfrom data to wide}
+# Ensure all combinations of transect_pair, period, and water are present
+transect_biomass_complete <- transect_biomass_summary %>%
+  group_by(transect_pair, period) %>%
+  complete(water = c("Yes", "No"), fill = list(total_biomass = 0))
+
+# Pivot to wide format for water Yes and No in the same row, and remove transect column
+transect_biomass_wide <- transect_biomass_complete %>%
+  select(-transect) %>%  # Remove transect column
+  pivot_wider(
+    names_from = water,
+    values_from = total_biomass,
+    names_prefix = "water_"
+  ) %>%
+  ungroup() %>%  # Ungroup to clean up the final data frame
+  arrange(transect_pair, period)  # Arrange for readability
+
+# View the final result
+print(transect_biomass_wide)
+```
+
+```{r plots}
+# Apply log transformation to biomass values
+df <- transect_biomass_wide %>% mutate(
+  log_water_No = log10(water_No),
+  log_water_Yes = log10(water_Yes)
+)
+
+# Ensure period is a factor with proper labels
+df$period <- factor(df$period, levels = c(1, 2), 
+                    labels = c("Summer (1)", "Winter (2)"))
+
+# Convert transect_pair to factor and ensure it displays as 1-11
+df$transect_pair <- factor(df$transect_pair, levels = sort(unique(df$transect_pair)))
+
+# Add names
+
+custom_labels <- c("Barmston Drain (S)", "East Park", "Hessle Foreshore", "Holderness Drain", "Noddle Hill",
+                   "Barmston Drain (N)", "River Hull (S)", "Pickering Park", "River Hull (N)", "Setting Dyke", "The Deep")
+
+# Create Dumbbell Plot with Facets for Each Period
+plot1 <- ggplot(df, aes(x = transect_pair)) +
+  geom_segment(aes(x = transect_pair, xend = transect_pair, y = log_water_No, yend = log_water_Yes), 
+               color = "gray", size = 1) +
+  geom_point(aes(y = log_water_No), color = "#65A73D", size = 3) + 
+  geom_point(aes(y = log_water_Yes), color = "#2A758E", size = 3) +
+  theme_bw() +
+  labs(
+    title = "",
+    x = "Transect Pairs",
+    y = "Log Biomass (kg)",
+    caption = "Green = No Water, Blue = With Water (log scale)"
+  ) +
+  theme(
+    strip.text = element_text(size = 14, face = "bold"), # Adjust size as needed
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(margin = margin(t = 10),size = 14),
+    axis.title.y = element_text(margin = margin(r = 15), size = 14)
+  ) +
+  facet_wrap(~ period, ncol = 2) +
+  scale_x_discrete(
+  breaks = unique(df$transect_pair),
+  labels = custom_labels
+)
+plot1
+#
+ggsave("biomass.png", plot = plot1, width = 12, height = 8, units = "in", dpi = 500)
+```
+
+```{r diagnostic plots all}
+# Define a function to plot histograms, boxplots, and perform Wilcoxon test (original and log-transformed)
+plot_and_test <- function(df, prefix) {
+  
+  # Set up a 2x4 layout for the plots to fit both original and log-transformed data
+  par(mfrow = c(2, 4))
+  
+  # Histograms for water_Yes and water_No (Original Scale)
+  hist(df$water_Yes, 
+       main = paste("Distribution of Biomass (", prefix, ") - water_Yes", sep = ""),
+       xlab = "Biomass (water_Yes)", 
+       col = "lightblue")
+  
+  hist(df$water_No, 
+       main = paste("Distribution of Biomass (", prefix, ") - water_No", sep = ""),
+       xlab = "Biomass (water_No)", 
+       col = "lightgreen")
+  
+  # Histograms for water_Yes and water_No (Log Scale)
+  hist(log(df$water_Yes), 
+       main = paste("Log Distribution of Biomass (", prefix, ") - water_Yes", sep = ""),
+       xlab = "Biomass (log water_Yes)", 
+       col = "lightblue")
+  
+  hist(log(df$water_No), 
+       main = paste("Log Distribution of Biomass (", prefix, ") - water_No", sep = ""),
+       xlab = "Biomass (log water_No)", 
+       col = "lightgreen")
+  
+  # Boxplot comparing water_Yes and water_No (Original Scale)
+  boxplot(df$water_Yes, df$water_No, 
+          names = c("water_Yes", "water_No"), 
+          main = paste("Boxplot (", prefix, ") - Biomass by Water Condition", sep = ""),
+          ylab = "Biomass")
+  
+  # Boxplot comparing log-transformed water_Yes and water_No
+  boxplot(log(df$water_Yes), log(df$water_No), 
+          names = c("log water_Yes", "log water_No"), 
+          main = paste("Log Boxplot (", prefix, ") - Biomass by Water Condition", sep = ""),
+          ylab = "Biomass (log scale)")
+
+  # Wilcoxon signed-rank test for paired samples (Original Scale)
+  wilcox_test <- wilcox.test(df$water_Yes, df$water_No, paired = TRUE)
+  print(paste("Wilcoxon Test for ", prefix, " (Original Scale):", sep = ""))
+  print(wilcox_test)
+  
+  # Wilcoxon signed-rank test for paired samples (Log Scale)
+  log_wilcox_test <- wilcox.test(log(df$water_Yes), log(df$water_No), paired = TRUE)
+  print(paste("Wilcoxon Test for ", prefix, " (Log Scale):", sep = ""))
+  print(log_wilcox_test)
+  
+  # Reset plotting layout to avoid affecting subsequent plots
+  par(mfrow = c(1, 1))
+}
+
+# Apply the function to both dataframes
+plot_and_test(transect_biomass_wide, "Full")
+```
+
+```{r summer data set}
+# Filter for summer periods (1, 2, 3) for both datasets
+full_summer <- transect_biomass_wide %>% filter(period %in% c(1, 3, 4))
+
+# Optional: Verify the contents
+print("Full Summer Dataset:")
+print(head(full_summer))
+```
+
+```{r summer diagnostics and wilcoxon}
+# Define a function to plot and test summer data
+plot_summer_analysis <- function(summer, prefix) {
+  
+  # Set up a 2x3 layout for the plots
+  par(mfrow = c(2, 3))
+  
+  # Histograms for water_Yes and water_No (Log and Original Scales)
+  hist(log(summer$water_Yes), 
+       main = paste("Log Distribution of Biomass (", prefix, " Summer) - water_Yes", sep = ""),
+       xlab = "Biomass (log water_Yes)", 
+       col = "lightblue")
+  
+  hist(summer$water_Yes, 
+       main = paste("Distribution of Biomass (", prefix, " Summer) - water_Yes", sep = ""),
+       xlab = "Biomass (water_Yes)", 
+       col = "lightblue")
+  
+  hist(log(summer$water_No), 
+       main = paste("Log Distribution of Biomass (", prefix, " Summer) - water_No", sep = ""),
+       xlab = "Biomass (log water_No)", 
+       col = "lightgreen")
+  
+  hist(summer$water_No, 
+       main = paste("Distribution of Biomass (", prefix, " Summer) - water_No", sep = ""),
+       xlab = "Biomass (water_No)", 
+       col = "lightgreen")
+
+  # Boxplots for Log-transformed and Original data
+  boxplot(log(summer$water_Yes), log(summer$water_No), 
+          names = c("log water_Yes", "log water_No"), 
+          main = paste("Log Boxplot (", prefix, " Summer) - Biomass by Water Condition", sep = ""),
+          ylab = "Biomass")
+  
+  boxplot(summer$water_Yes, summer$water_No, 
+          names = c("water_Yes", "water_No"), 
+          main = paste("Boxplot (", prefix, " Summer) - Biomass by Water Condition", sep = ""),
+          ylab = "Biomass")
+  
+  # Perform Wilcoxon signed-rank tests for log-transformed and original data
+  log_wilcox_test <- wilcox.test(log(summer$water_Yes), log(summer$water_No), paired = TRUE)
+  wilcox_test <- wilcox.test(summer$water_Yes, summer$water_No, paired = TRUE)
+  
+  # Print test results with clear prefix label
+  cat("\n### Results for", prefix, "Dataset ###\n")
+  cat("\n", paste("Log Wilcoxon Test for ", prefix, " Summer:", sep = ""))
+  print(log_wilcox_test)
+  
+  cat("\n", paste("Wilcoxon Test for ", prefix, " Summer:", sep = ""))
+  print(wilcox_test)
+  
+  # Reset plotting layout to avoid affecting subsequent plots
+  par(mfrow = c(1, 1))
+}
+
+# Apply the function to both pre-filtered summer datasets
+plot_summer_analysis(full_summer, "Full")
+```
+```{r summer differences}
+prefix <- "Differences"
+diffs <- full_summer$water_Yes - full_summer$water_No
+log_diffs <- log(full_summer$water_Yes) - log(full_summer$water_No)
+
+par(mfrow = c(1, 2))
+
+hist(diffs,
+     main = paste("Differences (", prefix, " Summer)", sep = ""),
+     xlab = "water_Yes - water_No",
+     col = "peachpuff")
+
+hist(log_diffs,
+     main = paste("Log Differences (", prefix, " Summer)", sep = ""),
+     xlab = "log(water_Yes) - log(water_No)",
+     col = "lightsteelblue1")
+```
+
+```{r winter data set}
+# Filter for winter period (period == 2) for both datasets
+full_winter <- transect_biomass_wide %>% filter(period == 2)
+print(head(full_winter))
+```
+
+```{r winter diagnostics and wilcoxon}
+
+# Define a function to plot and test winter data
+plot_winter_analysis <- function(winter, prefix) {
+  
+  # Set up a 2x3 layout for the plots
+  par(mfrow = c(2, 3))
+  
+  # Histograms for water_Yes and water_No (Log and Original Scales)
+  hist(log(winter$water_Yes), 
+       main = paste("Log Distribution of Biomass (", prefix, " Winter) - water_Yes", sep = ""),
+       xlab = "Biomass (log water_Yes)", 
+       col = "lightblue")
+  
+  hist(winter$water_Yes, 
+       main = paste("Distribution of Biomass (", prefix, " Winter) - water_Yes", sep = ""),
+       xlab = "Biomass (water_Yes)", 
+       col = "lightblue")
+  
+  hist(log(winter$water_No), 
+       main = paste("Log Distribution of Biomass (", prefix, " Winter) - water_No", sep = ""),
+       xlab = "Biomass (log water_No)", 
+       col = "lightgreen")
+  
+  hist(winter$water_No, 
+       main = paste("Distribution of Biomass (", prefix, " Winter) - water_No", sep = ""),
+       xlab = "Biomass (water_No)", 
+       col = "lightgreen")
+
+  # Boxplots for Log-transformed and Original data
+  boxplot(log(winter$water_Yes), log(winter$water_No), 
+          names = c("log water_Yes", "log water_No"), 
+          main = paste("Log Boxplot (", prefix, " Winter) - Biomass by Water Condition", sep = ""),
+          ylab = "Biomass")
+  
+  boxplot(winter$water_Yes, winter$water_No, 
+          names = c("water_Yes", "water_No"), 
+          main = paste("Boxplot (", prefix, " Winter) - Biomass by Water Condition", sep = ""),
+          ylab = "Biomass")
+  
+  # Perform Wilcoxon signed-rank tests for log-transformed and original data
+  log_wilcox_test <- wilcox.test(log(winter$water_Yes), log(winter$water_No), paired = TRUE)
+  wilcox_test <- wilcox.test(winter$water_Yes, winter$water_No, paired = TRUE)
+  
+  # Print test results with clear prefix label
+  cat("\n### Results for", prefix, "Dataset ###\n")
+  cat("\n", paste("Log Wilcoxon Test for ", prefix, " Winter:", sep = ""))
+  print(log_wilcox_test)
+  
+  cat("\n", paste("Wilcoxon Test for ", prefix, " Winter:", sep = ""))
+  print(wilcox_test)
+  
+  # Reset plotting layout to avoid affecting subsequent plots
+  par(mfrow = c(1, 1))
+}
+
+# Apply the function to both pre-filtered winter datasets
+plot_winter_analysis(full_winter, "Full")
+```
+
+```{r winter differences}
+prefix <- "Differences" 
+diffs <- full_winter$water_Yes - full_winter$water_No
+log_diffs <- log(full_winter$water_Yes) - log(full_winter$water_No)
+
+par(mfrow = c(1, 2))
+
+hist(diffs,
+     main = paste("Differences (", prefix, " Winter)", sep = ""),
+     xlab = "water_Yes - water_No",
+     col = "peachpuff")
+
+hist(log_diffs,
+     main = paste("Log Differences (", prefix, " Winter)", sep = ""),
+     xlab = "log(water_Yes) - log(water_No)",
+     col = "lightsteelblue1")
+```
