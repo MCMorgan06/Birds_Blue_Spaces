@@ -1,0 +1,5 @@
+Metric,Statistic,P_Value
+Shannon Index,46,0.27832031249999994
+Simpson Index,37,0.7646484374999999
+Pielou's Evenness,35,0.8984374999999999
+Total Species Richness,51.5,0.016394098626898574

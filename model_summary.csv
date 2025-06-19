@@ -1,0 +1,16 @@
+"Model","Key function","Formula","$\chi^2$ $p$-value","$\hat{P_a}$","se($\hat{P_a}$)","$\Delta$AIC"
+"\texttt{ahn.size.xhab}","Half-normal","~size_class * Region.Label",NA,0.218795541859527,0.00325992784553327,0
+"\texttt{ahn.size.xhab.w}","Half-normal","~size_class * Region.Label * water",NA,0.218313834090155,0.00326402997213789,4.48441880514019
+"\texttt{ahn.hab.obs.size}","Half-normal","~Region.Label + OBs + size_class",NA,0.219492404024141,0.00327254233660821,5.22113217331025
+"\texttt{ahn.size.hab}","Half-normal","~size_class + Region.Label",NA,0.219825307651294,0.0032601749837747,6.17431422973004
+"\texttt{ahn.hab.obs.size.w}","Half-normal","~Region.Label + OBs + size_class + water",NA,0.21946357111548,0.00327449230983041,6.71202047566021
+"\texttt{ahn.size.hab.w}","Half-normal","~size_class + Region.Label + water",NA,0.219804900304217,0.00326075912699453,7.7383567745901
+"\texttt{ahn.size.obs.w}","Half-normal","~size_class + OBs + water",NA,0.220309031169261,0.00324387897310672,17.9946981029802
+"\texttt{ahn.size.obs}","Half-normal","~size_class + OBs",NA,0.22070968805706,0.00322997480916508,22.6248626965503
+"\texttt{ahn.size}","Half-normal","~size_class",NA,0.221062119964854,0.00321744633496045,24.1418465544302
+"\texttt{ahn.hab.obs}","Half-normal","~Region.Label + OBs",NA,0.227798779519207,0.00317388376877269,192.11832578055
+"\texttt{ahn.hab.obs.w}","Half-normal","~Region.Label + OBs + water",NA,0.22777280175667,0.00317482463230831,193.60998319602
+"\texttt{ahn.hab}","Half-normal","~Region.Label",NA,0.228209266718998,0.00316859658632269,196.78326849362
+"\texttt{ahn.w}","Half-normal","~water",NA,0.228915315487239,0.00316572411714567,213.96849542917
+"\texttt{ahn.obs}","Half-normal","~OBs",NA,0.228822055780805,0.00316779710796887,214.72622007937
+"\texttt{ahn.0}","Half-normal","~1",NA,0.229231450752029,0.0031635329769983,219.66125369228
