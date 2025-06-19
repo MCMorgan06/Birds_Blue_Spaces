@@ -1,0 +1,171 @@
+---
+title: "Bird_Freq_Plots"
+author: "Matthew Morgan"
+date: "2025-01-27"
+output: html_document
+---
+
+```{r load packages}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(patchwork)
+library(readr)
+```
+
+```{r}
+bird <- read_csv("bird_count_freq_water_presence.csv", 
+                 show_col_types = FALSE)
+species_list_correct <- read_csv("species_list_correct.csv")
+name <- species_list_correct
+```
+
+```{r frequency plot}
+top_species <- bird %>%
+  arrange(desc(frequency_detected)) %>%  # Make sure it's arranged
+  slice(1:25) %>%
+  select(species, water_present_yes, water_present_no) %>%
+  pivot_longer(cols = c(water_present_yes, water_present_no), 
+               names_to = "Water", 
+               values_to = "Count") %>%
+  mutate(Water = ifelse(Water == "water_present_yes", "Yes", "No"),
+         Count = ifelse(Water == "No", -Count, Count))  # Make "No" negative
+
+top_species <- left_join(top_species, name, by = "species")
+print(top_species)
+# Set the order of species by frequency_detected
+top_species$bto <- factor(top_species$bto, levels = rev(unique(top_species$bto)))
+
+
+# Create the plot
+plot <- ggplot(top_species, aes(x = bto, y = Count, fill = Water)) +
+  geom_bar(stat = "identity", position = "identity", alpha = 1) +
+  coord_flip() +  # Flip the axes to have species on the y-axis
+  labs(x = "", y = "Encounter Frequency", title = "") +
+  scale_fill_manual(values = c("Yes" = "#2A758E", "No" = "#65A73D")) +
+  theme_minimal() +  # Apply black and white theme
+  theme(
+    text = element_text(size = 16), # Default text size for all text elements
+    axis.title.y = element_text(size = 16, margin = margin(r = 25, unit = "pt")),
+    axis.title.x = element_text(size = 16, margin = margin(t = 10, unit = "pt")),
+    plot.title = element_text(size = 20, hjust = 0.5), # Customize the plot title size and position
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(linewidth = 0.2, linetype = 'solid', colour = "grey"),
+    panel.grid.minor = element_blank(),
+    axis.ticks = element_line(color = "grey"),
+    legend.key = element_rect(colour = NA),
+    legend.text = element_text(size = 16)
+  )
+plot
+
+# 
+ggsave("top_species_water_presence_diverging.png", plot = plot, width = 8, height = 11, dpi = 300)
+```
+
+```{r count plot}
+bird_count <- read_csv("bird_count_water_presence.csv", 
+                 show_col_types = FALSE)
+
+# Prepare the data frame for plotting
+count <- bird_count %>%
+  arrange(desc(total_count)) %>%
+  slice(1:25) %>%
+  select(species, water_present_yes, water_present_no) %>%
+  pivot_longer(
+    cols = c(water_present_yes, water_present_no),
+    names_to = "Water",
+    values_to = "Count",
+    names_prefix = "water_present_"
+  ) %>%
+  mutate(
+    Water = ifelse(Water == "yes", "Yes", "No"),
+    Count = ifelse(Water == "No", -Count, Count)  # Make "No" counts negative for diverging effect
+  )
+
+count <- left_join(count, name, by = "species")
+print(count)
+  
+# Set the order of species by frequency_detected
+count$bto <- factor(count$bto, levels = rev(unique(count$bto)))
+
+# Create the plot
+plot1 <- ggplot(count, aes(x = bto, y = Count, fill = Water)) +
+  geom_bar(stat = "identity", position = "identity", alpha = 1) +
+  coord_flip() +  # Flip the axes to have species on the y-axis
+  labs(x = "", y = "Total Count", title = "") +
+  scale_fill_manual(values = c("Yes" = "#2A758E", "No" = "#65A73D")) +
+  scale_y_continuous(limits = c(-1500, 1500)) +  
+  theme_minimal() +
+  theme(
+    text = element_text(size = 16),
+    axis.title.y = element_text(size = 16, margin = margin(r = 25, unit = "pt")),
+    axis.title.x = element_text(size = 16, margin = margin(t = 10, unit = "pt")),
+    plot.title = element_text(size = 20, hjust = 0.5),
+    panel.background = element_rect(fill = "white", colour = "black"),
+    panel.grid.major = element_line(linewidth = 0.2, linetype = 'solid', colour = "grey"),
+    panel.grid.minor = element_blank(),
+    axis.ticks = element_line(color = "grey"),
+    legend.key = element_rect(colour = NA),
+    legend.text = element_text(size = 16)
+  )
+
+#
+print(plot1)
+
+# 
+ggsave("top_species_water_count_diverging.png", plot = plot1, width = 8, height = 11, dpi = 300)
+```
+
+```{r combine plots}
+# Combine the plots side by side
+combined_plot <- plot + plot1
+
+# Display the combined plot
+print(combined_plot)
+
+# 
+ggsave("count_freq_plots.png", width = 14, height = 8, dpi = 300)
+```
+
+```{r top 5}
+head(bird)
+top_5 <- 2053+1435+966+913+877
+print(top_5)
+top_per <- 6244/14708*100
+print(top_per)
+```
+
+```{r dynamic summing abundance}
+# Function to get sum of top n total_counts
+sum_top_n <- function(df, n) {
+  df %>%
+    arrange(desc(total_count)) %>%
+    slice_head(n = n) %>%
+    summarise(total = sum(total_count)) %>%
+    pull(total)
+}
+
+# Example usage:
+sum_top_n(bird, 25)  # Sum of top 15 (90%)
+sum_top_n(bird, 15)  # Sum of top 15 (76%)
+sum_top_n(bird, 10)  # Sum of top 10
+sum_top_n(bird, 5)   # Sum of top 5
+```
+
+```{r dynamic summing frequency}
+# Function to get sum of top n total_counts
+sum_top_n <- function(df, n) {
+  df %>%
+    arrange(desc(frequency_detected)) %>%
+    slice_head(n = n) %>%
+    summarise(total = sum(frequency_detected)) %>%
+    pull(total)
+}
+
+# Total = 5497
+sum_top_n(bird, 25)  # Sum of top 15 (88%)
+sum_top_n(bird, 15)  # Sum of top 15 (73%)
+sum_top_n(bird, 10)  # Sum of top 10 (58%)
+sum_top_n(bird, 5)   # Sum of top 5  (36%)
+```
+
